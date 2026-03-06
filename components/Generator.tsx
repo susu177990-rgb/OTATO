@@ -297,11 +297,19 @@ const Generator: React.FC<GeneratorProps> = ({
             </div>
             <div className="h-4 w-[1px] bg-gray-800"></div>
             <div className="flex items-center gap-1 bg-black/40 p-1 rounded-lg border border-gray-800">
-              {([
-                { id: 'nano-banana-2', label: 'Banana 2' },
-                { id: 'gemini-3.1-flash-image-preview', label: '3.1 Flash' },
-                { id: 'gemini-3-pro-image-preview', label: '3 Pro' },
-              ] as const).map(m => (
+              {((settings.apiConfig.apiProvider ?? 'laozhang') === 'grsai'
+                ? [
+                    { id: 'nano-banana-fast', label: 'Fast' },
+                    { id: 'nano-banana-2', label: '2' },
+                    { id: 'nano-banana-pro', label: 'Pro' },
+                    { id: 'nano-banana-pro-vip', label: 'Pro VIP' },
+                  ]
+                : [
+                    { id: 'nano-banana-2', label: 'Banana 2' },
+                    { id: 'gemini-3.1-flash-image-preview', label: '3.1 Flash' },
+                    { id: 'gemini-3-pro-image-preview', label: '3 Pro' },
+                  ]
+              ).map(m => (
                 <button
                   key={m.id}
                   onClick={() => setSettings(prev => ({ ...prev, apiConfig: { ...prev.apiConfig, modelName: m.id } }))}

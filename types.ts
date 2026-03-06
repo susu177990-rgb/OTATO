@@ -7,10 +7,13 @@ export interface ProtocolConfig {
   customPrompt?: string;
 }
 
+export type ApiProviderType = 'laozhang' | 'grsai';
+
 export interface ApiConfig {
   baseUrl: string;
   apiKey: string;
   modelName: string;
+  apiProvider?: ApiProviderType;
 }
 
 export interface AppSettings {

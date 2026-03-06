@@ -61,6 +61,9 @@ export const generateImage = async (
 
   const refs = await Promise.all(refImages.map(ensureBase64));
 
+  if (apiConfig.apiProvider === 'grsai') {
+    return generateViaGrsaiDraw(apiKey, baseUrl, modelName, prompt, config, refs);
+  }
   if (modelName === 'nano-banana-2') {
     return generateViaDallE(apiKey, baseUrl, modelName, prompt, config, refs);
   }
@@ -177,6 +180,94 @@ async function generateViaDallE(
   if (item.url) return item.url;
   if (item.b64_json) return `data:image/png;base64,${item.b64_json}`;
   throw new Error("响应格式异常");
+}
+
+const POLL_INTERVAL_MS = 1500;
+const POLL_MAX_ATTEMPTS = 120;
+
+async function generateViaGrsaiDraw(
+  apiKey: string,
+  baseUrl: string,
+  modelName: string,
+  prompt: string,
+  config: ProtocolConfig,
+  refImages: string[] = []
+): Promise<string> {
+  const cleanBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+  const url = `${cleanBase}/v1/draw/nano-banana`;
+
+  const urls: string[] = refImages.filter(
+    (r) => r && (r.startsWith('http') || r.startsWith('data:'))
+  );
+
+  const body: Record<string, unknown> = {
+    model: modelName,
+    prompt,
+    aspectRatio: config.aspectRatio,
+    imageSize: config.imageSize,
+    webHook: '-1',
+    shutProgress: true,
+  };
+  if (urls.length > 0) body.urls = urls;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`API 错误 (${response.status}): ${errBody}`);
+  }
+
+  const initData = await response.json();
+  if (initData.code !== 0 || !initData.data?.id) {
+    throw new Error(initData.msg || '未返回任务 ID');
+  }
+
+  const taskId = initData.data.id;
+  const resultUrl = `${cleanBase}/v1/draw/result`;
+
+  for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+
+    const resultRes = await fetch(resultUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ id: taskId }),
+    });
+
+    if (!resultRes.ok) {
+      const errBody = await resultRes.text();
+      throw new Error(`获取结果失败 (${resultRes.status}): ${errBody}`);
+    }
+
+    const resultData = await resultRes.json();
+    if (resultData.code === -22) throw new Error('任务不存在');
+    if (resultData.code !== 0) throw new Error(resultData.msg || '获取结果失败');
+
+    const data = resultData.data;
+    if (data.status === 'failed') {
+      const reason = data.failure_reason || data.error || '未知错误';
+      if (reason === 'output_moderation') throw new Error('输出违规');
+      if (reason === 'input_moderation') throw new Error('输入违规');
+      throw new Error(data.error || data.failure_reason || '生成失败');
+    }
+
+    if (data.status === 'succeeded' && data.results?.[0]?.url) {
+      const imgUrl = data.results[0].url;
+      return ensureBase64(imgUrl);
+    }
+  }
+
+  throw new Error('生成超时，请稍后重试');
 }
 
 export const fileToBase64 = (file: File): Promise<string> => {
