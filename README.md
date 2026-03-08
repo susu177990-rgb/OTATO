@@ -1,20 +1,51 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# OTATO 土豆生图
 
-# Run and deploy your AI Studio app
+AI 生图应用，支持 Web 与 Electron 桌面端。使用 Gemini / DALL·E 等模型生成图片。
 
-This contains everything you need to run your app locally.
+## 功能
 
-View your app in AI Studio: https://ai.studio/apps/48fcac43-8a39-4773-9939-1f39b4b8eb3a
+- 🖼️ AI 生图（支持 Gemini、Nano Banana 等模型）
+- 📁 图库管理、批量导出
+- ⚙️ 配置中心：API Endpoint、API Key、模型选择
+- 💾 本地存储（IndexedDB）
 
-## Run Locally
+## 运行
 
-**Prerequisites:**  Node.js
+**环境要求：** Node.js 18+
 
+```bash
+# 安装依赖
+npm install
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+# Web 开发
+npm run dev
+
+# Electron 桌面开发
+npm run electron:dev
+```
+
+## 配置
+
+无需环境变量。首次使用在应用内 **配置中心** 填写：
+
+- **API Endpoint**：接口地址（如 `https://api.laozhang.ai`）
+- **API Key**：你的 API 密钥
+- **模型**：选择或输入模型名（如 `gemini-3-pro-image-preview`）
+
+## 构建
+
+```bash
+# macOS
+npm run dist
+
+# Windows
+npm run dist:win
+```
+
+## 部署
+
+可部署到 Zeabur、Vercel 等平台，无需配置环境变量。
+
+## License
+
+Private
