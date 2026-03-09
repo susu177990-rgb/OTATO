@@ -1,0 +1,244 @@
+================================================================================
+                    土豆生图 App — 双 API 路线详细报告
+================================================================================
+生成时间：2025-03-09
+项目路径：/Users/griffith/Desktop/土豆生图app
+================================================================================
+
+一、概述
+--------------------------------------------------------------------------------
+本项目采用双 API 提供商架构，用户可在设置中切换：
+  1. Gemini Negative
+  2. Grsai Nano Banana（Grsai 接口 / grsai）
+
+路由决策逻辑位于 services/geminiService.ts 的 generateImage 函数：
+  - 若 apiProvider === 'grsai' → 走 Grsai Draw 路线
+  - 若 modelName === 'nano-banana-2' 且 provider 为 laozhang → 走 DALL-E 风格路线
+  - 其余情况 → 走 Google Gemini 原生路线
+
+
+二、路线一：Gemini Negative
+--------------------------------------------------------------------------------
+
+2.1 提供商标识
+  - 类型：ApiProviderType = 'laozhang'
+  - 界面名称：Gemini Negative
+  - 默认 baseUrl：空字符串（需用户自行填写，如 https://api.laozhang.ai）
+  - 默认 modelName：gemini-3-pro-image-preview
+
+2.2 支持的模型
+  | 模型 ID                           | 显示名称           |
+  |-----------------------------------|--------------------|
+  | nano-banana-2                     | Nano Banana 2      |
+  | gemini-3.1-flash-image-preview    | Gemini 3.1 Flash   |
+  | gemini-3-pro-image-preview        | Gemini 3 Pro (Image) |
+
+2.3 子路线 A：Google Gemini 原生接口（generateViaGoogleNative）
+  - 触发条件：modelName 不是 nano-banana-2
+  - 适用模型：gemini-3.1-flash-image-preview、gemini-3-pro-image-preview 等
+
+  【请求】
+    URL：
+      - 若 baseUrl 已含 /v1beta：{baseUrl}/models/{modelName}:generateContent?key={apiKey}
+      - 否则：{baseUrl}/v1beta/models/{modelName}:generateContent?key={apiKey}
+    方法：POST
+    请求头：
+      Content-Type: application/json
+      Authorization: Bearer {apiKey}
+      x-goog-api-key: {apiKey}
+    请求体：
+      {
+        contents: [{ parts: [{ text: prompt }, ...inlineData 参考图 ] }],
+        safetySettings: [ 全部 BLOCK_NONE ],
+        generationConfig: { imageConfig: { imageSize, aspectRatio? } }
+      }
+
+  【响应】
+    - 成功：JSON 中 candidates[0].content.parts 含 inlineData.data（base64 图片）
+    - 返回格式：data:image/png;base64,{data}
+
+  【安全设置】
+    HARM_CATEGORY_HARASSMENT / HATE_SPEECH / SEXUALLY_EXPLICIT / DANGEROUS_CONTENT
+    均设为 BLOCK_NONE
+
+2.4 子路线 B：DALL-E 风格接口（generateViaDallE）
+  - 触发条件：modelName === 'nano-banana-2' 且 apiProvider 为 laozhang
+
+  【无参考图】
+    URL：{baseUrl}/v1/images/generations
+    方法：POST
+    请求头：Content-Type: application/json, Authorization: Bearer {apiKey}
+    请求体：
+      {
+        model: "nano-banana-2",
+        prompt,
+        n: 1,
+        image_size: config.imageSize  // 1K/2K/4K
+      }
+    响应：data[0].url 或 data[0].b64_json
+
+  【有参考图】
+    URL：{baseUrl}/v1/images/edits
+    方法：POST
+    请求头：Authorization: Bearer {apiKey}
+    请求体：FormData
+      - model
+      - prompt
+      - image_size
+      - n: "1"
+      - image[]: 参考图 Blob 数组
+    响应：data[0].url 或 data[0].b64_json
+
+
+三、路线二：Grsai Nano Banana
+--------------------------------------------------------------------------------
+
+3.1 提供商标识
+  - 类型：ApiProviderType = 'grsai'
+  - 界面名称：Grsai Nano Banana
+  - 默认 baseUrl：https://grsai.dakka.com.cn（constants.ts 中 GRSAI_DEFAULT_BASE_URL）
+  - 默认 modelName：nano-banana-fast
+
+3.2 支持的模型
+  | 模型 ID               | 显示名称           |
+  |-----------------------|--------------------|
+  | nano-banana-fast      | Nano Banana Fast   |
+  | nano-banana-2         | Nano Banana 2      |
+  | nano-banana           | Nano Banana        |
+  | nano-banana-pro       | Nano Banana Pro    |
+  | nano-banana-pro-vt    | Nano Banana Pro VT |
+  | nano-banana-pro-cl    | Nano Banana Pro CL|
+  | nano-banana-pro-vip   | Nano Banana Pro VIP|
+  | nano-banana-pro-4k-vip| Nano Banana Pro 4K VIP |
+
+3.3 接口实现：Grsai Draw 异步任务（generateViaGrsaiDraw）
+  - 触发条件：apiConfig.apiProvider === 'grsai'
+  - 采用「提交任务 → 轮询结果」的两步流程
+
+  【步骤 1：提交绘图任务】
+    URL：{baseUrl}/v1/draw/nano-banana
+    方法：POST
+    请求头：
+      Content-Type: application/json
+      Authorization: Bearer {apiKey}
+    请求体：
+      {
+        model: modelName,
+        prompt,
+        aspectRatio: config.aspectRatio,   // auto | 1:1 | 3:4 | 4:3 | 9:16 | 16:9
+        imageSize: config.imageSize,       // 1K | 2K | 4K
+        webHook: "-1",
+        shutProgress: true,
+        urls?: [ 参考图 URL 数组 ]   // 可选，仅 http 或 data: 开头
+      }
+
+    成功响应：
+      { code: 0, data: { id: taskId } }
+    失败：code !== 0 或 无 data.id
+
+  【步骤 2：轮询获取结果】
+    URL：{baseUrl}/v1/draw/result
+    方法：POST
+    请求头：
+      Content-Type: application/json
+      Authorization: Bearer {apiKey}
+    请求体：{ id: taskId }
+
+    轮询参数：
+      - 间隔：1500ms（POLL_INTERVAL_MS）
+      - 最大次数：120 次（约 3 分钟）
+
+    结果状态：
+      - status === 'succeeded' 且 data.results[0].url 存在 → 返回图片 base64
+      - status === 'failed' → 根据 failure_reason 抛出错误
+        - output_moderation → "输出违规"
+        - input_moderation → "输入违规"
+      - code === -22 → "任务不存在"
+      - 超时 → "生成超时，请稍后重试"
+
+  【参考图处理】
+    - Grsai 路线仅支持 URL 形式参考图（http 或 data: 开头）
+    - 最终返回的图片 URL 会通过 ensureBase64 转为 base64 供前端使用
+
+
+四、路由决策流程图
+--------------------------------------------------------------------------------
+
+                    generateImage(config, apiConfig, refImages)
+                                    |
+                                    v
+                    +-------------------------------+
+                    | apiProvider === 'grsai' ?     |
+                    +-------------------------------+
+                         |                    |
+                        Yes                   No
+                         |                    |
+                         v                    v
+              generateViaGrsaiDraw    modelName === 'nano-banana-2' ?
+                    |                    |                    |
+                    |                   Yes                   No
+                    |                    |                    |
+                    |                    v                    v
+                    |           generateViaDallE    generateViaGoogleNative
+                    |                    |                    |
+                    v                    v                    v
+              /v1/draw/nano-banana   /v1/images/*      /v1beta/models/*:generateContent
+              轮询 /v1/draw/result
+
+
+五、配置与存储
+--------------------------------------------------------------------------------
+
+5.1 ApiConfig 类型（types.ts）
+  - baseUrl: string
+  - apiKey: string
+  - modelName: string
+  - apiProvider?: 'laozhang' | 'grsai'
+
+5.2 默认配置（constants.ts）
+  - laozhang：baseUrl 空，modelName gemini-3-pro-image-preview
+  - grsai：baseUrl https://grsai.dakka.com.cn，modelName nano-banana-fast
+
+5.3 切换提供商时的自动更新（Settings.tsx handleProviderChange）
+  - 切到 grsai：baseUrl → GRSAI_DEFAULT_BASE_URL，modelName → nano-banana-fast
+  - 切到 laozhang：baseUrl → 空，modelName → gemini-3-pro-image-preview
+
+5.4 持久化
+  - localStorage：otato_appSettings
+  - IndexedDB：appSettings（idb-keyval）
+
+
+六、比例与画质
+--------------------------------------------------------------------------------
+
+6.1 比例（AspectRatioType）
+  auto | 1:1 | 3:4 | 4:3 | 9:16 | 16:9
+
+6.2 画质（ImageSizeType）
+  1K | 2K | 4K
+
+6.3 各路线传递方式
+  - Google Native：generationConfig.imageConfig.aspectRatio / imageSize
+  - DALL-E：image_size（无 aspectRatio）
+  - Grsai Draw：body.aspectRatio、body.imageSize
+
+
+七、错误处理
+--------------------------------------------------------------------------------
+  - 统一通过 getErrorMessage（utils/errorUtils.ts）提取可读信息
+  - API 错误格式：API 错误 (${status}): ${errBody}
+  - Grsai 特有：任务不存在、输出违规、输入违规、生成超时
+
+
+八、相关文件索引
+--------------------------------------------------------------------------------
+  - 路由入口：services/geminiService.ts（generateImage）
+  - 类型定义：types.ts（ApiConfig、ApiProviderType）
+  - 常量：constants.ts（GRSAI_DEFAULT_BASE_URL、DEFAULT_APP_SETTINGS）
+  - 设置界面：components/Settings.tsx（提供商切换、模型预设）
+  - 生成器：components/Generator.tsx（模型快捷切换）
+
+
+================================================================================
+                              报告结束
+================================================================================

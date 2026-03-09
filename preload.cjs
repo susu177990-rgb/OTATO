@@ -5,9 +5,17 @@ contextBridge.exposeInMainWorld('electronFS', {
     saveImage: (id, base64DataUrl) =>
         ipcRenderer.invoke('fs:saveImage', id, base64DataUrl),
 
+    // 保存缩略图
+    saveThumbnail: (id, base64DataUrl) =>
+        ipcRenderer.invoke('fs:saveThumbnail', id, base64DataUrl),
+
     // 读取图片，返回 base64 data URL
     loadImage: (id) =>
         ipcRenderer.invoke('fs:loadImage', id),
+
+    // 读取缩略图（无则回退原图）
+    loadThumbnail: (id) =>
+        ipcRenderer.invoke('fs:loadThumbnail', id),
 
     // 删除图片文件
     deleteImage: (id) =>

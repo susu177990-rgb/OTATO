@@ -30,6 +30,8 @@ export interface LogEntry {
 export interface GeneratedImage {
   id: string;
   url: string;
+  /** 1K 缩略图，画廊网格展示用；点击放大时用 url 原图 */
+  thumbnailUrl?: string;
   prompt: string;
   timestamp: number;
   modelUsed: string;

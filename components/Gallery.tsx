@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { GeneratedImage, LogEntry } from '../types';
-import { Download, Calendar, Activity, Package, Trash2, FolderOpen } from 'lucide-react';
+import { Download, Calendar, Activity, Package, Trash2, FolderOpen, X } from 'lucide-react';
 import { downloadImage } from '../services/geminiService';
 import { getErrorMessage } from '../utils/errorUtils';
+import { loadFullImage } from '../services/imageStorage';
 import JSZip from 'jszip';
 
 interface GalleryProps {
@@ -14,6 +15,35 @@ interface GalleryProps {
 const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
   const [isZipping, setIsZipping] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [lightboxImg, setLightboxImg] = useState<GeneratedImage | null>(null);
+  const [lightboxFullUrl, setLightboxFullUrl] = useState<string | null>(null);
+  const [lightboxLoading, setLightboxLoading] = useState(false);
+
+  const displayUrl = (img: GeneratedImage) => img.thumbnailUrl || img.url;
+
+  const openLightbox = async (img: GeneratedImage) => {
+    setLightboxImg(img);
+    setLightboxFullUrl(null);
+    const hasFull = img.url && img.url.length > 10;
+    if (hasFull) {
+      setLightboxFullUrl(img.url);
+      return;
+    }
+    setLightboxLoading(true);
+    try {
+      const url = await loadFullImage(img);
+      setLightboxFullUrl(url);
+    } catch (e) {
+      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `加载原图失败: ${getErrorMessage(e)}` });
+    } finally {
+      setLightboxLoading(false);
+    }
+  };
+
+  const closeLightbox = () => {
+    setLightboxImg(null);
+    setLightboxFullUrl(null);
+  };
 
   const handleDelete = async (id: string) => {
     if (!confirm('确定要删除这张图片吗？此操作不可恢复。')) return;
@@ -33,6 +63,20 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
     }
   };
 
+  const getFullUrl = async (img: GeneratedImage): Promise<string> => {
+    if (img.url && img.url.length > 10) return img.url;
+    return loadFullImage(img);
+  };
+
+  const handleDownloadSingle = async (img: GeneratedImage) => {
+    try {
+      const url = await getFullUrl(img);
+      downloadImage(url, `otato-${img.id}.png`);
+    } catch (e) {
+      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `加载原图失败: ${getErrorMessage(e)}` });
+    }
+  };
+
   const handleDownloadAll = async () => {
     if (images.length === 0) return;
     setIsZipping(true);
@@ -43,18 +87,17 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
 
       for (const img of images) {
         try {
+          const url = await getFullUrl(img);
           let blob: Blob;
-          if (img.url.startsWith('data:')) {
-            // base64 data URL → 直接转 Blob
-            const [header, data] = img.url.split(',');
+          if (url.startsWith('data:')) {
+            const [header, data] = url.split(',');
             const mimeType = header.match(/:(.*?);/)?.[1] || 'image/png';
             const binary = atob(data);
             const array = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
             blob = new Blob([array], { type: mimeType });
           } else {
-            // HTTP URL → fetch 下载
-            const response = await fetch(img.url);
+            const response = await fetch(url);
             blob = await response.blob();
           }
           const filename = `img_${img.id}.png`;
@@ -103,10 +146,16 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
           <p>暂无生成产物。</p>
         </div>
       ) : (
-        <div className="columns-1 sm:columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4 overflow-y-auto pb-20 custom-scrollbar">
+        <div className="flex-1 min-h-0 overflow-y-auto pb-20 custom-scrollbar">
+          <div className="flex flex-wrap gap-4 content-start">
           {images.slice().reverse().map((img) => (
-            <div key={img.id} className="break-inside-avoid mb-4 group relative rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-indigo-500 transition-all">
-              <img src={img.url} alt="Generated" className="w-full h-auto block" />
+            <div key={img.id} className="flex-[1_1_140px] min-w-[120px] group relative rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-indigo-500 transition-all">
+              <img
+                src={displayUrl(img)}
+                alt="Generated"
+                className="w-full h-auto block cursor-pointer"
+                onClick={() => openLightbox(img)}
+              />
 
               <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
                 <p className="text-white text-[10px] font-medium line-clamp-3 mb-2 leading-relaxed">{img.prompt}</p>
@@ -116,28 +165,25 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
                     {new Date(img.timestamp).toLocaleDateString()}
                   </span>
                   <div className="flex items-center gap-1.5">
-                    {/* 在访达中显示 */}
                     {window.electronFS && (
                       <button
                         title="在访达中显示"
-                        onClick={() => handleShowInFolder(img.id)}
+                        onClick={(e) => { e.stopPropagation(); handleShowInFolder(img.id); }}
                         className="p-1.5 bg-white/10 backdrop-blur text-white rounded-lg hover:bg-white/20 transition-all active:scale-90"
                       >
                         <FolderOpen size={12} />
                       </button>
                     )}
-                    {/* 下载 */}
                     <button
                       title="下载"
-                      onClick={() => downloadImage(img.url, `otato-${img.id}.png`)}
+                      onClick={(e) => { e.stopPropagation(); handleDownloadSingle(img); }}
                       className="p-1.5 bg-indigo-600/80 backdrop-blur text-white rounded-lg hover:bg-indigo-500 transition-all active:scale-90"
                     >
                       <Download size={12} />
                     </button>
-                    {/* 删除 */}
                     <button
                       title="删除"
-                      onClick={() => handleDelete(img.id)}
+                      onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }}
                       disabled={deletingId === img.id}
                       className="p-1.5 bg-red-600/80 backdrop-blur text-white rounded-lg hover:bg-red-500 transition-all active:scale-90 disabled:opacity-40"
                     >
@@ -148,6 +194,40 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
               </div>
             </div>
           ))}
+          </div>
+        </div>
+      )}
+
+      {lightboxImg && (
+        <div
+          className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4"
+          onClick={closeLightbox}
+        >
+          <button
+            onClick={closeLightbox}
+            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white z-10"
+            aria-label="关闭"
+          >
+            <X size={24} />
+          </button>
+          <div className="max-w-[90vw] max-h-[90vh] flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+            {lightboxLoading ? (
+              <Activity className="animate-spin text-indigo-400" size={48} />
+            ) : lightboxFullUrl ? (
+              <>
+                <img src={lightboxFullUrl} alt="" className="max-w-full max-h-[85vh] object-contain rounded-lg" onClick={(e) => e.stopPropagation()} />
+                <p className="text-gray-400 text-sm mt-2 line-clamp-2 max-w-2xl">{lightboxImg.prompt}</p>
+                <div className="flex gap-2 mt-3">
+                  <button
+                    onClick={() => lightboxFullUrl && downloadImage(lightboxFullUrl, `otato-${lightboxImg.id}.png`)}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm flex items-center gap-2"
+                  >
+                    <Download size={16} /> 下载原图
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
         </div>
       )}
     </div>

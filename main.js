@@ -18,6 +18,10 @@ function getImagePath(id) {
   return path.join(getGalleryDir(), `${id}.png`);
 }
 
+function getThumbPath(id) {
+  return path.join(getGalleryDir(), `${id}_thumb.png`);
+}
+
 // Save base64 data URL → local PNG file
 ipcMain.handle('fs:saveImage', async (_event, id, base64DataUrl) => {
   try {
@@ -27,6 +31,19 @@ ipcMain.handle('fs:saveImage', async (_event, id, base64DataUrl) => {
     return { success: true };
   } catch (e) {
     console.error('fs:saveImage error', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Save thumbnail (1K)
+ipcMain.handle('fs:saveThumbnail', async (_event, id, base64DataUrl) => {
+  try {
+    const base64Data = base64DataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    fs.writeFileSync(getThumbPath(id), buffer);
+    return { success: true };
+  } catch (e) {
+    console.error('fs:saveThumbnail error', e);
     return { success: false, error: e.message };
   }
 });
@@ -44,11 +61,28 @@ ipcMain.handle('fs:loadImage', async (_event, id) => {
   }
 });
 
-// Delete a local image file
+// Load thumbnail (fallback to full if no thumb)
+ipcMain.handle('fs:loadThumbnail', async (_event, id) => {
+  try {
+    const thumbPath = getThumbPath(id);
+    const fullPath = getImagePath(id);
+    const pathToLoad = fs.existsSync(thumbPath) ? thumbPath : fullPath;
+    if (!fs.existsSync(pathToLoad)) return null;
+    const buffer = fs.readFileSync(pathToLoad);
+    return `data:image/png;base64,${buffer.toString('base64')}`;
+  } catch (e) {
+    console.error('fs:loadThumbnail error', e);
+    return null;
+  }
+});
+
+// Delete a local image file (and thumbnail)
 ipcMain.handle('fs:deleteImage', async (_event, id) => {
   try {
     const filePath = getImagePath(id);
+    const thumbPath = getThumbPath(id);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath);
     return { success: true };
   } catch (e) {
     console.error('fs:deleteImage error', e);

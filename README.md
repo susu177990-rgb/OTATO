@@ -14,8 +14,8 @@
 | **双 API 提供商** | Gemini Negative（老张）、Grsai Nano Banana |
 | **参考图生图** | 支持上传/粘贴参考图，图生图、编辑 |
 | **比例与画质** | 1:1 / 3:4 / 4:3 / 9:16 / 16:9，1K / 2K / 4K |
-| **图库管理** | 历史记录、单张下载、批量导出 ZIP |
-| **本地存储** | IndexedDB 持久化，无需后端 |
+| **图库管理** | 缩略图网格、点击放大查看原图、单张/批量导出 ZIP |
+| **智能存储** | Electron 原图+1K 缩略图分存，按需加载；浏览器用 IndexedDB |
 | **桌面应用** | Electron 打包，支持 macOS / Windows |
 
 ---
@@ -83,6 +83,15 @@ npm run dist:win
 
 配置保存在浏览器本地（localStorage + IndexedDB），不会上传到任何服务器。
 
+### 存储策略
+
+| 环境 | 原图 | 缩略图 | 说明 |
+|------|------|--------|------|
+| **Electron** | `userData/gallery/*.png` | `*_thumb.png`（1K） | 按需加载原图，图库展示缩略图 |
+| **浏览器** | IndexedDB | 同存 | 缩略图用于网格，点击放大显示原图 |
+
+图库支持点击图片放大查看（lightbox）、下载原图、批量导出 ZIP。
+
 ---
 
 ## 项目结构
@@ -91,12 +100,15 @@ npm run dist:win
 OTATO/
 ├── components/       # React 组件
 │   ├── Generator.tsx # 生图主界面
-│   ├── Gallery.tsx   # 图库
+│   ├── Gallery.tsx   # 图库（缩略图、lightbox、导出）
 │   └── Settings.tsx  # 配置中心
 ├── services/         # 业务逻辑
 │   ├── geminiService.ts  # 生图 API 调用
-│   └── imageStorage.ts   # 图片持久化
+│   └── imageStorage.ts   # 图片持久化（原图/缩略图分存）
 ├── utils/
+│   ├── imageUtils.ts     # 缩略图生成
+│   └── errorUtils.ts
+├── api路线报告.txt   # 双 API 路线、路由决策、接口说明
 ├── main.cjs          # Electron 主进程
 ├── preload.cjs       # Electron 预加载
 └── vite.config.ts
