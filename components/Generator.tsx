@@ -285,6 +285,11 @@ const Generator: React.FC<GeneratorProps> = ({
           >
             {isGenerating ? <><RefreshCw className="animate-spin" size={20} /> 正在生成...</> : <><Zap size={20} fill="currentColor" /> 立即生成</>}
           </button>
+
+          <div className="mt-3 px-2 py-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-[10px] text-indigo-300/90 space-y-1 leading-relaxed">
+            <p><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" className="underline hover:text-indigo-200">新ICP备2024016754号-2</a></p>
+            <p>本站 API 仅限合规技术研发及学术测试使用。用户须严格遵守《生成式人工智能服务管理暂行办法》，严禁利用本平台接口生成或传播违法违规内容。本平台不对用户行为承担连带法律责任。</p>
+          </div>
         </div>
       </div>
 
