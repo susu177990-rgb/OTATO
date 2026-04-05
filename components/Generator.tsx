@@ -120,18 +120,45 @@ const Generator: React.FC<GeneratorProps> = ({
 
   const setModel = (modelId: string) => {
     const preset = modelPresets.find(m => m.id === modelId);
-    setSettings(prev => ({
-      ...prev,
-      apiConfig: {
-        ...prev.apiConfig,
-        modelName: preset ? preset.modelName : modelId,
-        ...(preset?.url ? { endpointUrl: preset.url } : {})
-      }
-    }));
+    setSettings(prev => {
+      let newEndpointUrl = prev.savedUrls?.[modelId] ?? (preset?.url ?? prev.apiConfig.endpointUrl);
+      const newApiKey = prev.savedApiKeys?.[modelId] ?? '';
+
+      return {
+        ...prev,
+        apiConfig: {
+          ...prev.apiConfig,
+          modelName: preset ? preset.modelName : modelId,
+          presetId: modelId,
+          endpointUrl: newEndpointUrl,
+          apiKey: newApiKey
+        }
+      };
+    });
   };
 
-  const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) =>
-    setSettings(prev => ({ ...prev, apiConfig: { ...prev.apiConfig, [key]: val } }));
+  const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
+    setSettings(prev => {
+      const nextApiConfig = { ...prev.apiConfig, [key]: val };
+      let nextSavedApiKeys = prev.savedApiKeys || {};
+      let nextSavedUrls = prev.savedUrls || {};
+      
+      const memoryKey = prev.apiConfig.presetId || prev.apiConfig.modelName;
+
+      if (key === 'apiKey') {
+        nextSavedApiKeys = { ...nextSavedApiKeys, [memoryKey]: val };
+      } else if (key === 'endpointUrl') {
+        nextSavedUrls = { ...nextSavedUrls, [memoryKey]: val };
+      }
+
+      return {
+        ...prev,
+        apiConfig: nextApiConfig,
+        savedApiKeys: nextSavedApiKeys,
+        savedUrls: nextSavedUrls
+      };
+    });
+  };
 
   const handleGenerate = async () => {
     const combinedPrompt = prompts.map(p => p.trim()).filter(Boolean).join(' ');

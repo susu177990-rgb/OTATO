@@ -14,12 +14,15 @@ export interface ApiConfig {
   endpointUrl: string;
   apiKey: string;
   modelName: string;
+  presetId?: string;
   apiProvider?: ApiProviderType;
 }
 
 export interface AppSettings {
   apiConfig: ApiConfig;
   videoApiConfig?: ApiConfig;
+  savedApiKeys?: Record<string, string>;
+  savedUrls?: Record<string, string>;
 }
 
 export interface LogEntry {

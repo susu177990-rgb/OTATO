@@ -13,5 +13,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     endpointUrl: 'https://api.gpt-best.com/v2/videos/generations',
     apiKey: '',
     modelName: 'luma-v1.6'
-  }
+  },
+  savedApiKeys: {},
+  savedUrls: {}
 };
