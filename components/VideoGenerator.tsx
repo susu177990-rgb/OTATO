@@ -11,27 +11,24 @@ import {
   Camera,
   AlignLeft,
   Cpu,
-  Key,
+  Settings as SettingsIcon,
+  Film,
   Server
 } from 'lucide-react';
-import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ImageSizeType, ProtocolConfig } from '../types';
-import { generateImage, downloadImage, isImageResult, fileToBase64 } from '../services/geminiService';
+import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ProtocolConfig } from '../types';
+import { downloadImage, fileToBase64 } from '../services/geminiService';
+import { generateVideo } from '../services/videoService';
 import { getErrorMessage } from '../utils/errorUtils';
 
-// ── 模型预设（侧边栏快速切换用） ──────────────────────────────────
-const OPENAI_MODEL_PRESETS = [
-  { id: 'gemini-3.1-flash',      modelName: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash' },
-  { id: 'gemini-3-pro',          modelName: 'gemini-3-pro-image-preview',     name: 'Gemini 3 Pro' },
-  { id: 'gpt-image-1.5',         modelName: 'gpt-image-1.5',                  name: 'GPT Image 1.5' },
-  { id: 'bltcy-nb-pro',          modelName: 'nano-banana-pro',                name: 'Nano Banana Pro (柏拉图专属)', url: 'https://api.bltcy.ai/v1/images/generations' },
+const VIDEO_MODEL_PRESETS = [
+  { id: 'luma-v1.6',       name: 'Luma v1.6' },
+  { id: 'kling-v1.5',      name: 'Kling v1.5' },
+  { id: 'runway-gen3',     name: 'Runway Gen3' },
+  { id: 'cogvideox-5b',    name: 'CogVideo-5B' },
+  { id: 'hailuo',          name: 'Hailuo' },
 ];
 
-const GRSAI_MODEL_PRESETS = [
-  { id: 'grsai-nb-pro',          modelName: 'nano-banana-pro',                name: 'Nano Banana Pro (GRS专属)', url: 'https://grsai.dakka.com.cn/v1/draw/nano-banana' },
-  { id: 'nano-banana-2',         modelName: 'nano-banana-2',                  name: 'Nano Banana 2 (GRS专属)',   url: 'https://grsai.dakka.com.cn/v1/draw/nano-banana' },
-];
-
-interface GeneratorProps {
+interface VideoGeneratorProps {
   isActive: boolean;
   settings: AppSettings;
   setSettings: React.Dispatch<React.SetStateAction<AppSettings>>;
@@ -41,7 +38,7 @@ interface GeneratorProps {
   showLogs: boolean;
 }
 
-const Generator: React.FC<GeneratorProps> = ({
+const VideoGenerator: React.FC<VideoGeneratorProps> = ({
   isActive,
   settings,
   setSettings,
@@ -52,18 +49,15 @@ const Generator: React.FC<GeneratorProps> = ({
 }) => {
   const [prompts, setPrompts] = React.useState<string[]>(['']);
   const [refImages, setRefImages] = React.useState<string[]>([]);
-  const [aspectRatio, setAspectRatio] = React.useState<AspectRatioType>('auto');
-  const [imageSize, setImageSize] = React.useState<ImageSizeType>('1K');
+  const [aspectRatio, setAspectRatio] = React.useState<AspectRatioType>('16:9');
+  const [duration, setDuration] = React.useState<number>(5);
   const [isGenerating, setIsGenerating] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  // 虽然不暴露 provider 切换开关，但直接把这两组模型做合并全量展示
-  const modelPresets = [...OPENAI_MODEL_PRESETS, ...GRSAI_MODEL_PRESETS];
-
-  // 当前模型是否不在预设列表里
-  const currentModelInPresets = modelPresets.some(m => m.id === settings.apiConfig.modelName);
+  const videoApiConfig = settings.videoApiConfig || { endpointUrl: '', apiKey: '', modelName: 'luma-v1.6' };
+  const currentModelInPresets = VIDEO_MODEL_PRESETS.some(m => m.id === videoApiConfig.modelName);
 
   useEffect(() => {
     if (showLogs) logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -118,59 +112,43 @@ const Generator: React.FC<GeneratorProps> = ({
   const removePrompt = (idx: number) => setPrompts(prev => prev.filter((_, i) => i !== idx));
   const updatePrompt = (idx: number, val: string) => setPrompts(prev => prev.map((p, i) => i === idx ? val : p));
 
-  const setModel = (modelId: string) => {
-    const preset = modelPresets.find(m => m.id === modelId);
-    setSettings(prev => ({
-      ...prev,
-      apiConfig: {
-        ...prev.apiConfig,
-        modelName: preset ? preset.modelName : modelId,
-        ...(preset?.url ? { endpointUrl: preset.url } : {})
-      }
-    }));
-  };
+  const setModel = (modelId: string) =>
+    setSettings(prev => ({ ...prev, videoApiConfig: { ...videoApiConfig, modelName: modelId } }));
 
   const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) =>
-    setSettings(prev => ({ ...prev, apiConfig: { ...prev.apiConfig, [key]: val } }));
+    setSettings(prev => ({ ...prev, videoApiConfig: { ...videoApiConfig, [key]: val } }));
 
   const handleGenerate = async () => {
     const combinedPrompt = prompts.map(p => p.trim()).filter(Boolean).join(' ');
     if (!combinedPrompt) { setError('请输入提示词'); return; }
     setIsGenerating(true);
     setError(null);
-    const config: ProtocolConfig = { aspectRatio, imageSize, customPrompt: combinedPrompt };
+    const config = { aspectRatio, duration, customPrompt: combinedPrompt };
     const startTime = Date.now();
-    addLog({ id: `start-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `开始生图 [${settings.apiConfig.modelName || '默认模型'}]...` });
+    addLog({ id: `start-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `开始生成视频 [${videoApiConfig.modelName}]...` });
 
     try {
-      const resultUrl = await generateImage(config, settings.apiConfig, refImages);
+      const resultUrl = await generateVideo(config, videoApiConfig, refImages);
       setLastResult(resultUrl);
-      if (resultUrl && isImageResult(resultUrl)) {
-        let persistUrl = resultUrl;
-        if (resultUrl.startsWith('http')) {
-          try {
-            addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: '正在转换网络图片为本地图像...' });
-            const resp = await fetch(resultUrl);
-            const blob = await resp.blob();
-            persistUrl = await new Promise<string>((res, rej) => {
-              const r = new FileReader();
-              r.onloadend = () => res(r.result as string);
-              r.onerror = rej;
-              r.readAsDataURL(blob);
-            });
-          } catch (cvtErr) {
-            addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `URL转base64失败: ${getErrorMessage(cvtErr)}` });
-          }
-        }
-        await addGeneratedImage({ id: Date.now().toString(), url: persistUrl, prompt: combinedPrompt, timestamp: Date.now(), modelUsed: settings.apiConfig.modelName, parameters: config });
-      }
-      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: `生成成功，耗时 ${duration}s` });
+      
+      // 我们在此复用 addGeneratedImage 的钩子，将其当成视频源存起来
+      await addGeneratedImage({ 
+        id: Date.now().toString(), 
+        url: resultUrl, 
+        type: 'video',
+        prompt: combinedPrompt, 
+        timestamp: Date.now(), 
+        modelUsed: videoApiConfig.modelName, 
+        parameters: config 
+      });
+      
+      const genDur = ((Date.now() - startTime) / 1000).toFixed(1);
+      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: `视频生成成功，耗时 ${genDur}s` });
     } catch (err) {
       const msg = getErrorMessage(err);
       setError(msg);
-      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `生图失败 (耗时 ${duration}s): ${msg}` });
+      const genDur = ((Date.now() - startTime) / 1000).toFixed(1);
+      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `视频生成失败 (耗时 ${genDur}s): ${msg}` });
     } finally {
       setIsGenerating(false);
     }
@@ -197,21 +175,21 @@ const Generator: React.FC<GeneratorProps> = ({
           <div className="px-3 py-2 border-b border-gray-800/60 bg-black/20 flex-shrink-0">
             <div className="flex items-center gap-1.5 mb-2">
               <Server size={11} className="text-gray-600" />
-              <span className="text-[10px] font-bold uppercase font-mono text-gray-500 tracking-wider">API 配置</span>
+              <span className="text-[10px] font-bold uppercase font-mono text-gray-500 tracking-wider">Video API 设置</span>
             </div>
             
             <div className="space-y-1.5 mb-2">
               <input
                 type="text"
-                placeholder="Endpoint URL (包含 /v1/...)"
-                value={settings.apiConfig.endpointUrl}
+                placeholder="Endpoint URL (例如包含 /v2/videos/generations)"
+                value={videoApiConfig.endpointUrl}
                 onChange={e => setApiConfig('endpointUrl', e.target.value)}
                 className="w-full bg-black/50 border border-gray-700 rounded-md px-2 py-1.5 text-[10px] text-white outline-none font-mono focus:border-indigo-500 transition-colors placeholder-gray-600"
               />
               <input
                 type="text"
                 placeholder="API Key (sk-...)"
-                value={settings.apiConfig.apiKey}
+                value={videoApiConfig.apiKey}
                 onChange={e => setApiConfig('apiKey', e.target.value)}
                 className="w-full bg-black/50 border border-gray-700 rounded-md px-2 py-1.5 text-[10px] text-white outline-none font-mono focus:border-indigo-500 transition-colors placeholder-gray-600"
               />
@@ -231,31 +209,27 @@ const Generator: React.FC<GeneratorProps> = ({
               <input
                 type="text"
                 placeholder="或输入自定义模型..."
-                value={settings.apiConfig.modelName}
+                value={videoApiConfig.modelName}
                 onChange={e => setApiConfig('modelName', e.target.value)}
                 className="w-full bg-black/40 border border-gray-700/80 rounded px-2 py-1.5 text-[10px] text-white outline-none font-mono focus:border-indigo-500 transition-colors placeholder-gray-600"
               />
             </div>
-            
+
             <div className="space-y-0.5">
-              {modelPresets.map(m => {
-                const isSelected = settings.apiConfig.modelName === m.modelName && 
-                                   (!m.url || settings.apiConfig.endpointUrl === m.url);
-                return (
-                  <button
-                    key={m.id}
-                    onClick={() => setModel(m.id)}
-                    title={m.name}
-                    className={`w-full text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
-                      isSelected
-                        ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/20'
-                        : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
-                    }`}
-                  >
-                    {m.name}
-                  </button>
-                );
-              })}
+              {VIDEO_MODEL_PRESETS.map(m => (
+              <button
+                key={m.id}
+                onClick={() => setModel(m.id)}
+                title={m.id}
+                className={`w-full text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
+                  videoApiConfig.modelName === m.id
+                    ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/20'
+                    : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
+                }`}
+              >
+                {m.name}
+              </button>
+            ))}
 
             </div>
           </div>
@@ -270,42 +244,34 @@ const Generator: React.FC<GeneratorProps> = ({
         {/* 预览区 */}
         <div className="flex-1 relative flex items-center justify-center overflow-hidden min-h-0 bg-black">
           {lastResult ? (
-            (lastResult.startsWith('data:image') || lastResult.startsWith('http')) ? (
-              <div className="relative group w-full h-full flex items-center justify-center p-6">
-                <img
-                  src={lastResult}
-                  alt="Generated"
-                  className="max-w-full max-h-full object-contain rounded-2xl shadow-[0_0_60px_rgba(0,0,0,0.9)]"
-                />
-                {/* hover 操作 */}
-                <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-3 opacity-0 group-hover:opacity-100 transition-all duration-200 translate-y-1 group-hover:translate-y-0">
-                  <button
-                    onClick={() => downloadImage(lastResult, `otato-${Date.now()}.png`)}
-                    className="flex items-center gap-2 px-4 py-2 bg-black/70 backdrop-blur-md rounded-full text-white text-xs font-semibold border border-white/10 hover:bg-white/10 transition"
-                  >
-                    <Download size={13} /> 下载
-                  </button>
-                  <button
-                    onClick={() => window.open(lastResult, '_blank')}
-                    className="flex items-center gap-2 px-4 py-2 bg-black/70 backdrop-blur-md rounded-full text-white text-xs font-semibold border border-white/10 hover:bg-white/10 transition"
-                  >
-                    <Maximize2 size={13} /> 全屏
-                  </button>
-                </div>
+            <div className="relative group w-full h-full flex items-center justify-center p-6">
+              <video
+                src={lastResult}
+                controls
+                autoPlay
+                loop
+                className="max-w-full max-h-full object-contain rounded-2xl shadow-[0_0_60px_rgba(0,0,0,0.9)]"
+              />
+              {/* hover 操作 */}
+              <div className="absolute bottom-16 left-1/2 -translate-x-1/2 flex gap-3 opacity-0 group-hover:opacity-100 transition-all duration-200 translate-y-1 group-hover:translate-y-0">
+                <button
+                  onClick={() => downloadImage(lastResult, `video-${Date.now()}.mp4`)}
+                  className="flex items-center gap-2 px-4 py-2 bg-black/70 backdrop-blur-md rounded-full text-white text-xs font-semibold border border-white/10 hover:bg-white/10 transition"
+                >
+                  <Download size={13} /> 下载
+                </button>
+                <button
+                  onClick={() => window.open(lastResult, '_blank')}
+                  className="flex items-center gap-2 px-4 py-2 bg-black/70 backdrop-blur-md rounded-full text-white text-xs font-semibold border border-white/10 hover:bg-white/10 transition"
+                >
+                  <Maximize2 size={13} /> 全屏
+                </button>
               </div>
-            ) : (
-              <div className="w-full max-w-2xl p-8 overflow-y-auto custom-scrollbar">
-                <div className="flex items-center gap-2 mb-4 text-purple-400">
-                  <Terminal size={14} />
-                  <span className="text-xs font-bold tracking-wider">LLM RESPONSE</span>
-                </div>
-                <div className="text-gray-200 leading-relaxed whitespace-pre-wrap text-sm font-mono">{lastResult}</div>
-              </div>
-            )
+            </div>
           ) : (
-            <div className="text-center select-none pointer-events-none">
-              <ImageIcon size={52} className="mx-auto mb-3 text-gray-800" />
-              <p className="text-[10px] text-gray-700 uppercase tracking-[0.3em] font-bold">Ready to Generate</p>
+            <div className="text-center select-none pointer-events-none pb-12">
+              <Film size={52} className="mx-auto mb-3 text-gray-800" />
+              <p className="text-[10px] text-gray-700 uppercase tracking-[0.3em] font-bold">Ready to Generate Video</p>
             </div>
           )}
 
@@ -440,13 +406,12 @@ const Generator: React.FC<GeneratorProps> = ({
             <div className="w-px h-3 bg-gray-800 shrink-0" />
 
             <select
-              value={imageSize}
-              onChange={e => setImageSize(e.target.value as ImageSizeType)}
+              value={duration}
+              onChange={e => setDuration(Number(e.target.value))}
               className="bg-transparent text-[10px] text-gray-500 outline-none cursor-pointer hover:text-gray-300 transition-colors font-mono"
             >
-              <option value="1K">画质: 1K</option>
-              <option value="2K">画质: 2K</option>
-              <option value="4K">画质: 4K</option>
+              <option value="5">时长: 5s</option>
+              <option value="10">时长: 10s</option>
             </select>
 
             {error && (
@@ -491,4 +456,4 @@ const Generator: React.FC<GeneratorProps> = ({
   );
 };
 
-export default Generator;
+export default VideoGenerator;

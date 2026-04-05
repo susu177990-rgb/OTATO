@@ -10,7 +10,8 @@ export interface ProtocolConfig {
 export type ApiProviderType = 'laozhang' | 'grsai';
 
 export interface ApiConfig {
-  baseUrl: string;
+  /** 完整 API 请求地址，如 https://api.bltcy.ai/v1/chat/completions */
+  endpointUrl: string;
   apiKey: string;
   modelName: string;
   apiProvider?: ApiProviderType;
@@ -18,6 +19,7 @@ export interface ApiConfig {
 
 export interface AppSettings {
   apiConfig: ApiConfig;
+  videoApiConfig?: ApiConfig;
 }
 
 export interface LogEntry {
@@ -27,9 +29,12 @@ export interface LogEntry {
   message: string;
 }
 
-export interface GeneratedImage {
+export type MediaType = 'image' | 'video';
+
+export interface GeneratedImage { /* 现在我们泛用于媒体，改名比较麻烦，暂时在内部添加 type */
   id: string;
   url: string;
+  type?: MediaType; // 标识是图片还是视频，默认为 image
   /** 1K 缩略图，画廊网格展示用；点击放大时用 url 原图 */
   thumbnailUrl?: string;
   prompt: string;
@@ -37,3 +42,4 @@ export interface GeneratedImage {
   modelUsed: string;
   parameters: any;
 }
+

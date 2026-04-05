@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Layers, Zap, Image, Settings as SettingsIcon } from 'lucide-react';
+import { Layers, Zap, Image, Settings as SettingsIcon, Terminal, Film } from 'lucide-react';
 import { get, set } from 'idb-keyval';
 import Generator from './components/Generator';
+import VideoGenerator from './components/VideoGenerator';
 import Gallery from './components/Gallery';
-import Settings from './components/Settings';
 import { GeneratedImage, LogEntry, AppSettings } from './types';
 import { DEFAULT_APP_SETTINGS } from './constants';
 import { persistImage, loadAllImages, deletePersistedImage } from './services/imageStorage';
 import { getErrorMessage } from './utils/errorUtils';
 
 const App: React.FC = () => {
-  const [activeView, setActiveView] = useState<'GENERATE' | 'GALLERY' | 'SETTINGS'>('GENERATE');
+  const [activeView, setActiveView] = useState<'GENERATE' | 'GALLERY' | 'VIDEO'>('GENERATE');
+  const [showLogs, setShowLogs] = useState(true);
   const [isLoaded, setIsLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'SAVED' | 'SAVING'>('SAVED');
 
@@ -20,9 +21,7 @@ const App: React.FC = () => {
     { id: '1', timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: '系统已初始化' },
   ]);
 
-  const addLog = (entry: LogEntry) => {
-    setLogs(prev => [...prev, entry]);
-  };
+  const addLog = (entry: LogEntry) => setLogs(prev => [...prev, entry]);
 
   const addGeneratedImage = async (img: GeneratedImage) => {
     await persistImage(img);
@@ -46,13 +45,10 @@ const App: React.FC = () => {
             addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `加载设置失败: ${getErrorMessage(e)}` });
           }
         }
-
         const pSettings = await get('appSettings');
         if (pSettings && !localSettingsStr) setAppSettings(pSettings);
-
         const images = await loadAllImages();
         setGeneratedImages(images);
-
         addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: `本地数据已加载，共 ${images.length} 张图` });
       } catch (e) {
         addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `加载本地数据失败: ${getErrorMessage(e)}` });
@@ -70,7 +66,7 @@ const App: React.FC = () => {
     const timer = setTimeout(() => {
       set('appSettings', appSettings)
         .then(() => setSaveStatus('SAVED'))
-        .catch((e) => {
+        .catch(e => {
           addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `保存设置失败: ${getErrorMessage(e)}` });
           setSaveStatus('SAVED');
         });
@@ -79,48 +75,50 @@ const App: React.FC = () => {
   }, [appSettings, isLoaded]);
 
   if (!isLoaded) {
-    return <div className="h-screen w-screen bg-black flex items-center justify-center text-indigo-500 font-mono">LOADING...</div>;
+    return <div className="h-screen w-screen bg-black flex items-center justify-center text-indigo-500 font-mono text-sm tracking-widest">LOADING...</div>;
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-black font-sans text-gray-100 selection:bg-indigo-500 selection:text-white">
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-black font-sans text-gray-100 selection:bg-indigo-500/40">
 
-      <nav className="w-16 md:w-20 border-r border-gray-800 flex flex-col items-center py-6 bg-gray-900/50 backdrop-blur-md z-50">
-        <div className="mb-8 p-2 bg-indigo-600 rounded-lg shadow-[0_0_15px_rgba(79,70,229,0.5)]">
-          <Layers className="text-white" size={24} />
+      {/* ── 顶部导航栏 ── */}
+      <header className="flex-shrink-0 h-11 border-b border-gray-800/80 bg-gray-950 flex items-center px-3 gap-1 z-40">
+        {/* Logo */}
+        <div className="p-1.5 bg-indigo-600 rounded-md mr-2 shadow-[0_0_12px_rgba(79,70,229,0.5)]">
+          <Layers className="text-white" size={15} />
         </div>
 
-        <div className="flex-1 flex flex-col gap-6 w-full">
-          <NavIcon
-            icon={<Zap size={24} />}
-            label="生图"
-            isActive={activeView === 'GENERATE'}
-            onClick={() => setActiveView('GENERATE')}
+        {/* 页面 tabs */}
+        <TabBtn icon={<Zap size={13} />} label="生图" active={activeView === 'GENERATE'} onClick={() => setActiveView('GENERATE')} />
+        <TabBtn icon={<Film size={13} />} label="视频" active={activeView === 'VIDEO'} onClick={() => setActiveView('VIDEO')} />
+        <TabBtn icon={<Image size={13} />} label="画廊" active={activeView === 'GALLERY'} onClick={() => setActiveView('GALLERY')} />
+
+        <div className="flex-1" />
+
+        {/* 右侧工具区 */}
+        <div className="flex items-center gap-1">
+          {/* 保存状态点 */}
+          <div
+            title={saveStatus === 'SAVED' ? '已同步' : '保存中...'}
+            className={`w-1.5 h-1.5 rounded-full mr-2 transition-colors ${saveStatus === 'SAVED' ? 'bg-green-600' : 'bg-yellow-500 animate-pulse'}`}
           />
-          <NavIcon
-            icon={<Image size={24} />}
-            label="画廊"
-            isActive={activeView === 'GALLERY'}
-            onClick={() => setActiveView('GALLERY')}
-          />
+
+          {/* LOGS 按钮（仅生图和视频页显示） */}
+          {activeView !== 'GALLERY' && (
+            <button
+              onClick={() => setShowLogs(v => !v)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide transition-colors ${
+                showLogs ? 'bg-gray-800 text-gray-200' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
+              }`}
+            >
+              <Terminal size={12} /> LOGS
+            </button>
+          )}
         </div>
+      </header>
 
-        <div className="mt-auto flex flex-col items-center gap-4">
-          <div className="text-[9px] font-mono text-gray-600 flex flex-col items-center">
-            <div className={`w-2 h-2 rounded-full mb-1 ${saveStatus === 'SAVED' ? 'bg-green-900 border border-green-600' : 'bg-yellow-600 animate-pulse'}`}></div>
-            {saveStatus}
-          </div>
-          <NavIcon
-            icon={<SettingsIcon size={24} />}
-            label="设置"
-            isActive={activeView === 'SETTINGS'}
-            onClick={() => setActiveView('SETTINGS')}
-          />
-        </div>
-      </nav>
-
-      <main className="flex-1 relative overflow-hidden bg-gray-950">
-
+      {/* ── 主内容区 ── */}
+      <main className="flex-1 overflow-hidden">
         <div className={`h-full w-full ${activeView === 'GENERATE' ? 'block' : 'hidden'}`}>
           <Generator
             isActive={activeView === 'GENERATE'}
@@ -129,34 +127,36 @@ const App: React.FC = () => {
             addLog={addLog}
             logs={logs}
             addGeneratedImage={addGeneratedImage}
+            showLogs={showLogs}
           />
         </div>
-
+        <div className={`h-full w-full ${activeView === 'VIDEO' ? 'block' : 'hidden'}`}>
+          <VideoGenerator
+            isActive={activeView === 'VIDEO'}
+            settings={appSettings}
+            setSettings={setAppSettings}
+            addLog={addLog}
+            logs={logs}
+            addGeneratedImage={addGeneratedImage}
+            showLogs={showLogs}
+          />
+        </div>
         <div className={`h-full w-full ${activeView === 'GALLERY' ? 'block' : 'hidden'}`}>
           <Gallery images={generatedImages} onDelete={handleDeleteImage} addLog={addLog} />
         </div>
-
-        <div className={`h-full w-full ${activeView === 'SETTINGS' ? 'block' : 'hidden'}`}>
-          <Settings settings={appSettings} setSettings={setAppSettings} />
-        </div>
-
       </main>
     </div>
   );
 };
 
-const NavIcon: React.FC<{ icon: React.ReactNode, label: string, isActive: boolean, onClick: () => void }> = ({ icon, label, isActive, onClick }) => (
+const TabBtn: React.FC<{ icon: React.ReactNode; label: string; active: boolean; onClick: () => void }> = ({ icon, label, active, onClick }) => (
   <button
     onClick={onClick}
-    className={`group relative w-full flex flex-col items-center justify-center gap-1 py-3 transition-all ${isActive ? 'text-indigo-400' : 'text-gray-500 hover:text-gray-300'}`}
+    className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide transition-colors ${
+      active ? 'bg-indigo-600/20 text-indigo-400' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/40'
+    }`}
   >
-    <div className={`p-2 rounded-xl transition-all ${isActive ? 'bg-indigo-900/30' : 'group-hover:bg-gray-800'}`}>
-      {icon}
-    </div>
-    <span className="text-[10px] font-medium tracking-wide">{label}</span>
-    {isActive && (
-      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-500 rounded-r-full" />
-    )}
+    {icon}{label}
   </button>
 );
 

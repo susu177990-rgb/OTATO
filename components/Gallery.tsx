@@ -71,7 +71,8 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
   const handleDownloadSingle = async (img: GeneratedImage) => {
     try {
       const url = await getFullUrl(img);
-      downloadImage(url, `otato-${img.id}.png`);
+      const ext = img.type === 'video' ? 'mp4' : 'png';
+      downloadImage(url, `otato-${img.id}.${ext}`);
     } catch (e) {
       addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `加载原图失败: ${getErrorMessage(e)}` });
     }
@@ -150,12 +151,22 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
           <div className="flex flex-wrap gap-4 content-start">
           {images.slice().reverse().map((img) => (
             <div key={img.id} className="flex-[1_1_140px] min-w-[120px] group relative rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-indigo-500 transition-all">
-              <img
-                src={displayUrl(img)}
-                alt="Generated"
-                className="w-full h-auto block cursor-pointer"
-                onClick={() => openLightbox(img)}
-              />
+              {img.type === 'video' ? (
+                <video
+                  src={displayUrl(img)}
+                  className="w-full h-auto block cursor-pointer"
+                  onClick={() => openLightbox(img)}
+                  muted
+                  playsInline
+                />
+              ) : (
+                <img
+                  src={displayUrl(img)}
+                  alt="Generated"
+                  className="w-full h-auto block cursor-pointer"
+                  onClick={() => openLightbox(img)}
+                />
+              )}
 
               <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
                 <p className="text-white text-[10px] font-medium line-clamp-3 mb-2 leading-relaxed">{img.prompt}</p>
@@ -215,14 +226,21 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
               <Activity className="animate-spin text-indigo-400" size={48} />
             ) : lightboxFullUrl ? (
               <>
-                <img src={lightboxFullUrl} alt="" className="max-w-full max-h-[85vh] object-contain rounded-lg" onClick={(e) => e.stopPropagation()} />
+                {lightboxImg.type === 'video' ? (
+                  <video src={lightboxFullUrl} controls autoPlay loop className="max-w-full max-h-[85vh] object-contain rounded-lg" onClick={(e) => e.stopPropagation()} />
+                ) : (
+                  <img src={lightboxFullUrl} alt="" className="max-w-full max-h-[85vh] object-contain rounded-lg" onClick={(e) => e.stopPropagation()} />
+                )}
                 <p className="text-gray-400 text-sm mt-2 line-clamp-2 max-w-2xl">{lightboxImg.prompt}</p>
                 <div className="flex gap-2 mt-3">
                   <button
-                    onClick={() => lightboxFullUrl && downloadImage(lightboxFullUrl, `otato-${lightboxImg.id}.png`)}
+                    onClick={() => {
+                      const ext = lightboxImg.type === 'video' ? 'mp4' : 'png';
+                      lightboxFullUrl && downloadImage(lightboxFullUrl, `otato-${lightboxImg.id}.${ext}`);
+                    }}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm flex items-center gap-2"
                   >
-                    <Download size={16} /> 下载原图
+                    <Download size={16} /> 下载原格式
                   </button>
                 </div>
               </>

@@ -52,52 +52,68 @@ export const generateImage = async (
   refImages: string[] = []
 ): Promise<string> => {
   const apiKey = apiConfig?.apiKey || '';
-  let baseUrl = apiConfig?.baseUrl || '';
+  const endpointUrl = apiConfig?.endpointUrl?.trim() || '';
   const modelName = apiConfig?.modelName;
   const prompt = config.customPrompt || '';
 
-  if (!baseUrl || !modelName || !apiKey) throw new Error("请先在设置中配置 API");
-  if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+  if (!endpointUrl || !modelName || !apiKey) throw new Error("请先在设置中配置完整的 Endpoint URL、模型名和 API Key");
 
   const refs = await Promise.all(refImages.map(ensureBase64));
 
-  if (apiConfig.apiProvider === 'grsai') {
-    return generateViaGrsaiDraw(apiKey, baseUrl, modelName, prompt, config, refs);
+  if (apiConfig.apiProvider === 'grsai' || endpointUrl.includes('grsai') || endpointUrl.includes('dakka')) {
+    return generateViaGrsaiDraw(apiKey, endpointUrl, modelName, prompt, config, refs);
   }
-  if (modelName === 'nano-banana-2') {
-    return generateViaDallE(apiKey, baseUrl, modelName, prompt, config, refs);
+  
+  // 如果端点明确指向了 /images/... 或者是 dall-e 系列，则走原生图像生成（带多模态表单上传）通道
+  if (endpointUrl.includes('/images/') || modelName.includes('dall-e') || modelName === 'nano-banana-2') {
+    return generateViaDallE(apiKey, endpointUrl, modelName, prompt, config, refs);
   }
-  return generateViaGoogleNative(apiKey, baseUrl, modelName, prompt, config, refs);
+
+  return generateViaOpenAICompatible(apiKey, endpointUrl, modelName, prompt, config, refs);
 };
 
-async function generateViaGoogleNative(
-  apiKey: string, baseUrl: string, modelName: string, prompt: string, config: ProtocolConfig, refImages: string[] = []
+// ────────────────────────────────────────────────────────────────
+// OpenAI-compatible /chat/completions（支持 Gemini 中转站等）
+// endpointUrl 示例：https://api.bltcy.ai/v1/chat/completions
+// ────────────────────────────────────────────────────────────────
+async function generateViaOpenAICompatible(
+  apiKey: string, endpointUrl: string, modelName: string, prompt: string, config: ProtocolConfig, refImages: string[] = []
 ): Promise<string> {
-  const cleanBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-  const url = cleanBase.includes('/v1beta')
-    ? `${cleanBase}/models/${modelName}:generateContent?key=${apiKey}`
-    : `${cleanBase}/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-  const parts: any[] = [{ text: prompt }];
-  for (const ref of refImages) {
-    if (ref.startsWith('data:')) parts.push({ inlineData: { mimeType: getMimeType(ref), data: ref.split(',')[1] } });
+  let userContent: any = prompt;
+  if (refImages.length > 0) {
+    userContent = [{ type: 'text', text: prompt }];
+    for (const ref of refImages) {
+      if (ref.startsWith('data:')) {
+        userContent.push({
+          type: 'image_url',
+          image_url: { url: ref }
+        });
+      }
+    }
   }
+
   const aspectRatioValue = getApiSupportedRatio(config.aspectRatio);
   const imageConfig: Record<string, any> = { imageSize: config.imageSize };
   if (aspectRatioValue) imageConfig.aspectRatio = aspectRatioValue;
 
-  const payload = {
-    contents: [{ parts }],
-    safetySettings: SAFETY_SETTINGS,
-    generationConfig: { imageConfig }
+  const payload: Record<string, any> = {
+    model: modelName,
+    prompt: prompt, // 部分中转站提取强需该字段
+    messages: [{ role: 'user', content: userContent }]
   };
 
-  const response = await fetch(url, {
+  // 仅在明确是 Google 系模型时，挂靠特有安全与生成配置
+  if (modelName.toLowerCase().includes('gemini')) {
+    payload.safetySettings = SAFETY_SETTINGS;
+    payload.generationConfig = { imageConfig };
+  }
+
+  const response = await fetch(endpointUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
-      'x-goog-api-key': apiKey
     },
     body: JSON.stringify(payload)
   });
@@ -109,23 +125,69 @@ async function generateViaGoogleNative(
 
   const data = await response.json();
 
-  if (!data.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)) {
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || JSON.stringify(data);
+  // -------------------------------------------------------------
+  // 兼容逻辑 A：中转站将请求完美路由至原生 Image 接口，返回标准结构
+  // 结构形如 {"data":[{"url":"..."}]}
+  // -------------------------------------------------------------
+  if (data.data && Array.isArray(data.data) && data.data.length > 0) {
+    const imgObj = data.data[0];
+    if (imgObj.url) return imgObj.url;
+    if (imgObj.b64_json) return `data:image/png;base64,${imgObj.b64_json}`;
   }
 
-  const part = data.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData);
-  if (!part) throw new Error("未返回图片");
-  return `data:image/png;base64,${part.inlineData.data}`;
+  // -------------------------------------------------------------
+  // 兼容逻辑 B：标准 Chat Completions (文本/多模态混排返回)
+  // -------------------------------------------------------------
+  const choice = data.choices?.[0];
+  const contentParts = choice?.message?.content;
+
+  if (Array.isArray(contentParts)) {
+    for (const part of contentParts) {
+      if (part.type === 'image_url' && part.image_url?.url) return part.image_url.url;
+      if (part.type === 'image' && part.image_url?.url) return part.image_url.url;
+      if (part.type === 'text' && part.text) return part.text;
+    }
+  }
+
+  // 纯文本回复（如部分代理商将图片当做文本段落或 markdown 返回）
+  if (typeof contentParts === 'string') {
+    if (contentParts.trim() === '') {
+      return `[EMPTY_CONTENT_STRING_DETECTED] 原始返回数据：\n${JSON.stringify(data, null, 2)}`;
+    }
+
+    // 尝试提取 Markdown 格式的图片: ![alt](url)
+    const mdMatch = contentParts.match(/!\[.*?\]\((https?:\/\/[^\s)]+)\)/);
+    if (mdMatch && mdMatch[1]) return mdMatch[1];
+    
+    // 尝试直接提取 URL 链接
+    const urlMatch = contentParts.match(/(https?:\/\/[^\s)]+\.(?:png|jpe?g|webp|gif))/i);
+    if (urlMatch && urlMatch[1]) return urlMatch[1];
+
+    // 其他以 http 开头的普通文本链接，或者纯字符串
+    if (contentParts.trim().startsWith('http')) return contentParts.trim();
+    
+    return contentParts;
+  }
+
+  // 兼容旧 Google Native 格式（部分中转站透传原始结构）
+  const nativePart = data.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData);
+  if (nativePart) return `data:image/png;base64,${nativePart.inlineData.data}`;
+  const nativeText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (nativeText) return nativeText;
+
+  return JSON.stringify(data);
 }
 
+// ────────────────────────────────────────────────────────────────
+// DALL-E / images 接口（用于 nano-banana-2 等）
+// endpointUrl 直接填写完整地址，如 https://api.xxx.com/v1/images/generations
+// ────────────────────────────────────────────────────────────────
 async function generateViaDallE(
-  apiKey: string, baseUrl: string, modelName: string, prompt: string, config: ProtocolConfig, refImages: string[] = []
+  apiKey: string, endpointUrl: string, modelName: string, prompt: string, config: ProtocolConfig, refImages: string[] = []
 ): Promise<string> {
-  const cleanBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
 
   if (refImages.length === 0) {
-    const url = `${cleanBase}/v1/images/generations`;
-    const response = await fetch(url, {
+    const response = await fetch(endpointUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -150,7 +212,8 @@ async function generateViaDallE(
     throw new Error("响应格式异常");
   }
 
-  const url = `${cleanBase}/v1/images/edits`;
+  // 有参考图时走 edits，将 /generations 替换为 /edits
+  const editsUrl = endpointUrl.replace('/generations', '/edits');
   const formData = new FormData();
   formData.append('model', modelName);
   formData.append('prompt', prompt);
@@ -162,7 +225,7 @@ async function generateViaDallE(
     formData.append('image[]', blob, `ref_${i}.${ext}`);
   });
 
-  const response = await fetch(url, {
+  const response = await fetch(editsUrl, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}` },
     body: formData,
@@ -176,7 +239,6 @@ async function generateViaDallE(
   const data = await response.json();
   const item = data.data?.[0];
   if (!item) throw new Error("未返回图片");
-
   if (item.url) return item.url;
   if (item.b64_json) return `data:image/png;base64,${item.b64_json}`;
   throw new Error("响应格式异常");
@@ -185,16 +247,18 @@ async function generateViaDallE(
 const POLL_INTERVAL_MS = 1500;
 const POLL_MAX_ATTEMPTS = 120;
 
+// ────────────────────────────────────────────────────────────────
+// Grsai 专属绘图接口（异步轮询）
+// endpointUrl 示例：https://grsai.dakka.com.cn/v1/draw/nano-banana
+// ────────────────────────────────────────────────────────────────
 async function generateViaGrsaiDraw(
   apiKey: string,
-  baseUrl: string,
+  endpointUrl: string,
   modelName: string,
   prompt: string,
   config: ProtocolConfig,
   refImages: string[] = []
 ): Promise<string> {
-  const cleanBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-  const url = `${cleanBase}/v1/draw/nano-banana`;
 
   const urls: string[] = refImages.filter(
     (r) => r && (r.startsWith('http') || r.startsWith('data:'))
@@ -210,7 +274,7 @@ async function generateViaGrsaiDraw(
   };
   if (urls.length > 0) body.urls = urls;
 
-  const response = await fetch(url, {
+  const response = await fetch(endpointUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -230,7 +294,8 @@ async function generateViaGrsaiDraw(
   }
 
   const taskId = initData.data.id;
-  const resultUrl = `${cleanBase}/v1/draw/result`;
+  // 轮询地址：将 draw/nano-banana 换为 draw/result
+  const resultUrl = endpointUrl.replace(/\/draw\/[^/]+$/, '/draw/result');
 
   for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
