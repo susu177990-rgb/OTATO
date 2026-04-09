@@ -29,6 +29,9 @@ interface ImageMeta {
     timestamp: number;
     modelUsed: string;
     parameters: any;
+    type?: GeneratedImage['type'];
+    url?: string;
+    thumbnailUrl?: string;
 }
 
 async function loadMeta(): Promise<ImageMeta[]> {
@@ -49,23 +52,50 @@ async function saveMeta(meta: ImageMeta[]): Promise<void> {
  * - 浏览器：生成缩略图后整体写 IndexedDB
  */
 export async function persistImage(img: GeneratedImage): Promise<void> {
+    if (img.type === 'video') {
+        if (isElectron()) {
+            const meta = await loadMeta();
+            const nextMeta = meta.filter(item => item.id !== img.id);
+            nextMeta.push({
+                id: img.id,
+                prompt: img.prompt,
+                timestamp: img.timestamp,
+                modelUsed: img.modelUsed,
+                parameters: img.parameters,
+                type: 'video',
+                url: img.url,
+                thumbnailUrl: img.thumbnailUrl ?? img.url,
+            });
+            await saveMeta(nextMeta);
+        } else {
+            const existing: GeneratedImage[] = (await get('generatedImages')) || [];
+            const nextExisting = existing.filter(item => item.id !== img.id);
+            nextExisting.push({ ...img, thumbnailUrl: img.thumbnailUrl ?? img.url });
+            await set('generatedImages', nextExisting);
+        }
+        return;
+    }
+
     const thumb = await createThumbnail(img.url);
     if (isElectron()) {
         await window.electronFS!.saveImage(img.id, img.url);
         await window.electronFS!.saveThumbnail(img.id, thumb);
         const meta = await loadMeta();
-        meta.push({
+        const nextMeta = meta.filter(item => item.id !== img.id);
+        nextMeta.push({
             id: img.id,
             prompt: img.prompt,
             timestamp: img.timestamp,
             modelUsed: img.modelUsed,
             parameters: img.parameters,
+            type: img.type,
         });
-        await saveMeta(meta);
+        await saveMeta(nextMeta);
     } else {
         const existing: GeneratedImage[] = (await get('generatedImages')) || [];
-        existing.push({ ...img, thumbnailUrl: thumb });
-        await set('generatedImages', existing);
+        const nextExisting = existing.filter(item => item.id !== img.id);
+        nextExisting.push({ ...img, thumbnailUrl: thumb });
+        await set('generatedImages', nextExisting);
     }
 }
 
@@ -81,6 +111,14 @@ export async function loadAllImages(): Promise<GeneratedImage[]> {
 
         const results = await Promise.all(
             meta.map(async (m): Promise<GeneratedImage | null> => {
+                if (m.type === 'video') {
+                    return {
+                        ...m,
+                        type: 'video',
+                        url: m.url || '',
+                        thumbnailUrl: m.thumbnailUrl ?? m.url ?? '',
+                    };
+                }
                 const thumbnailUrl = await window.electronFS!.loadThumbnail(m.id);
                 if (!thumbnailUrl) return null;
                 return { ...m, thumbnailUrl, url: '' };
@@ -101,6 +139,7 @@ export async function loadAllImages(): Promise<GeneratedImage[]> {
  * 按需加载原图（Electron 从磁盘读取，浏览器直接返回已有 url）。
  */
 export async function loadFullImage(img: GeneratedImage): Promise<string> {
+    if (img.type === 'video' && img.url) return img.url;
     if (img.url && !img.url.startsWith('file:')) return img.url;
     if (isElectron()) {
         const url = await window.electronFS!.loadImage(img.id);

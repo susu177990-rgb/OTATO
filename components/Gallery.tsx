@@ -101,7 +101,9 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
             const response = await fetch(url);
             blob = await response.blob();
           }
-          const filename = `img_${img.id}.png`;
+          const ext = img.type === 'video' ? 'mp4' : 'png';
+          const prefix = img.type === 'video' ? 'video' : 'img';
+          const filename = `${prefix}_${img.id}.${ext}`;
           folder.file(filename, blob);
         } catch (e) {
           addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `添加图片到压缩包失败 (${img.id}): ${getErrorMessage(e)}` });

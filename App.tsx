@@ -25,7 +25,10 @@ const App: React.FC = () => {
 
   const addGeneratedImage = async (img: GeneratedImage) => {
     await persistImage(img);
-    setGeneratedImages(prev => [...prev, img]);
+    setGeneratedImages(prev => {
+      const next = prev.filter(existing => existing.id !== img.id);
+      return [...next, img];
+    });
   };
 
   const handleDeleteImage = async (id: string) => {
