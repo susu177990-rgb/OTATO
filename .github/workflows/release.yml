@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Electron App (macOS)
+        run: npm run electron:build
+        env:
+          ELECTRON_BUILDER_PLATFORM: darwin
+
+      - name: Build Electron App (Windows)
+        run: npm run dist:win
+        env:
+          ELECTRON_BUILDER_PLATFORM: win32
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/mac/**/*.dmg
+            release/win/**/*.exe
+            release/win/**/*.zip
+          generate_release_notes: true
+          tag_name: v${{ github.run_number }}
+          release_name: OTATO v${{ github.run_number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
