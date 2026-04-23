@@ -17,5 +17,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     modelName: 'kling-video-motion-control'
   },
   savedApiKeys: {},
-  savedUrls: {}
+  savedUrls: {},
+  customModels: []
 };

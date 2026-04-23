@@ -18,11 +18,20 @@ export interface ApiConfig {
   apiProvider?: ApiProviderType;
 }
 
+export interface CustomModelConfig {
+  id: string;
+  name: string;
+  modelName: string;
+  endpointUrl: string;
+  apiKey: string;
+}
+
 export interface AppSettings {
   apiConfig: ApiConfig;
   videoApiConfig?: ApiConfig;
   savedApiKeys?: Record<string, string>;
   savedUrls?: Record<string, string>;
+  customModels?: CustomModelConfig[];
 }
 
 export interface LogEntry {
