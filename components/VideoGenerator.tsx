@@ -12,9 +12,11 @@ import {
   AlignLeft,
   Cpu,
   Settings as SettingsIcon,
-  Film
+  Film,
+  Save,
+  Trash2
 } from 'lucide-react';
-import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ProtocolConfig } from '../types';
+import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ProtocolConfig, CustomModelConfig } from '../types';
 import { downloadImage, fileToBase64 } from '../services/geminiService';
 import { generateVideo, queryVideoTask } from '../services/videoService';
 import { getErrorMessage } from '../utils/errorUtils';
@@ -62,6 +64,8 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
   const [isGenerating, setIsGenerating] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [showAddModel, setShowAddModel] = React.useState(false);
+  const [newModel, setNewModel] = React.useState({ name: '', modelName: '', endpointUrl: '', apiKey: '' });
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const videoApiConfig = settings.videoApiConfig || { endpointUrl: '', apiKey: '', modelName: 'luma-v1.6' };
@@ -194,6 +198,51 @@ const setModel = (modelId: string) => {
         savedUrls: nextSavedUrls
       };
     });
+  };
+
+  const handleSaveCustomModel = () => {
+    if (!newModel.name || !newModel.modelName || !newModel.endpointUrl) {
+      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: '请填写模型名称、模型名和API地址' });
+      return;
+    }
+    const modelId = `custom-${Date.now()}`;
+    const customModel: CustomModelConfig = {
+      id: modelId,
+      name: newModel.name,
+      modelName: newModel.modelName,
+      endpointUrl: newModel.endpointUrl,
+      apiKey: newModel.apiKey
+    };
+    setSettings(prev => ({
+      ...prev,
+      videoCustomModels: [...(prev.videoCustomModels || []), customModel],
+      savedUrls: { ...prev.savedUrls, [modelId]: newModel.endpointUrl },
+      savedApiKeys: { ...prev.savedApiKeys, [modelId]: newModel.apiKey }
+    }));
+    addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: `自定义模型「${newModel.name}」已保存` });
+    setNewModel({ name: '', modelName: '', endpointUrl: '', apiKey: '' });
+    setShowAddModel(false);
+  };
+
+  const handleDeleteCustomModel = (modelId: string) => {
+    setSettings(prev => ({
+      ...prev,
+      videoCustomModels: (prev.videoCustomModels || []).filter(m => m.id !== modelId)
+    }));
+    addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `自定义模型已删除` });
+  };
+
+  const setCustomModel = (model: CustomModelConfig) => {
+    setSettings(prev => ({
+      ...prev,
+      videoApiConfig: {
+        ...prev.videoApiConfig,
+        modelName: model.modelName,
+        presetId: model.id,
+        endpointUrl: model.endpointUrl,
+        apiKey: model.apiKey || prev.savedApiKeys?.[model.id] || ''
+      }
+    }));
   };
 
   const handleGenerate = async () => {
@@ -330,26 +379,104 @@ const setModel = (modelId: string) => {
       <Cpu size={11} className="text-gray-600" />
       <span className="text-[10px] font-bold uppercase font-mono text-gray-500 tracking-wider">模型</span>
     </div>
+    <button
+      onClick={() => setShowAddModel(v => !v)}
+      className="p-1 rounded hover:bg-gray-800/60 text-gray-500 hover:text-indigo-400 transition-colors"
+      title="添加自定义模型"
+    >
+      <Plus size={13} />
+    </button>
   </div>
 
-  <div className="flex-1 overflow-y-auto custom-scrollbar py-1.5 px-2 space-y-0.5">
-    {VIDEO_MODEL_PRESETS.map(m => {
-      const isSelected = settings.videoApiConfig?.presetId === m.id;
-      return (
-        <button
-          key={m.id}
-          onClick={() => setModel(m.id)}
-          title={m.id}
-          className={`w-full text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
-            isSelected
-            ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/20'
-            : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
-          }`}
-        >
-          {m.name}
-        </button>
-      );
-    })}
+  {showAddModel && (
+    <div className="px-2 py-2 border-b border-gray-800/60 bg-black/20 space-y-1.5">
+      <input
+        type="text"
+        placeholder="显示名称"
+        value={newModel.name}
+        onChange={e => setNewModel(prev => ({ ...prev, name: e.target.value }))}
+        className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none font-mono focus:border-indigo-500 placeholder-gray-600"
+      />
+      <input
+        type="text"
+        placeholder="模型名"
+        value={newModel.modelName}
+        onChange={e => setNewModel(prev => ({ ...prev, modelName: e.target.value }))}
+        className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none font-mono focus:border-indigo-500 placeholder-gray-600"
+      />
+      <input
+        type="text"
+        placeholder="API 地址"
+        value={newModel.endpointUrl}
+        onChange={e => setNewModel(prev => ({ ...prev, endpointUrl: e.target.value }))}
+        className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none font-mono focus:border-indigo-500 placeholder-gray-600"
+      />
+      <input
+        type="text"
+        placeholder="API Key (可选)"
+        value={newModel.apiKey}
+        onChange={e => setNewModel(prev => ({ ...prev, apiKey: e.target.value }))}
+        className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none font-mono focus:border-indigo-500 placeholder-gray-600"
+      />
+      <button
+        onClick={handleSaveCustomModel}
+        className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 rounded text-[10px] font-bold transition-colors"
+      >
+        <Save size={10} /> 保存模型
+      </button>
+    </div>
+  )}
+
+  <div className="flex-1 overflow-y-auto custom-scrollbar py-1.5 px-2 space-y-1">
+    {settings.videoCustomModels && settings.videoCustomModels.length > 0 && (
+      <div className="space-y-0.5">
+        {settings.videoCustomModels.map(m => {
+          const isSelected = settings.videoApiConfig?.presetId === m.id;
+          return (
+            <div key={m.id} className="group flex items-center">
+              <button
+                onClick={() => setCustomModel(m)}
+                title={`${m.name}\n${m.endpointUrl}`}
+                className={`flex-1 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
+                  isSelected
+                  ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/20'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
+                }`}
+              >
+                {m.name}
+              </button>
+              <button
+                onClick={() => handleDeleteCustomModel(m.id)}
+                className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all"
+                title="删除"
+              >
+                <Trash2 size={10} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    )}
+
+    <div className="space-y-0.5 pt-1 border-t border-gray-800/40">
+      {VIDEO_MODEL_PRESETS.map(m => {
+        const isSelected = settings.videoApiConfig?.presetId === m.id;
+        return (
+          <button
+            key={m.id}
+            onClick={() => setModel(m.id)}
+            title={m.id}
+            className={`w-full text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
+              isSelected
+              ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/20'
+              : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
+            }`}
+          >
+            {m.name}
+          </button>
+        );
+      })}
+    </div>
   </div>
 </aside>
 

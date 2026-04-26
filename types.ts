@@ -32,6 +32,7 @@ export interface AppSettings {
   savedApiKeys?: Record<string, string>;
   savedUrls?: Record<string, string>;
   customModels?: CustomModelConfig[];
+  videoCustomModels?: CustomModelConfig[];
 }
 
 export interface LogEntry {
