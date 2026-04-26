@@ -436,12 +436,13 @@ return (
         onChange={e => setAspectRatio(e.target.value as AspectRatioType)}
         className="flex-1 bg-black/40 border border-gray-700/80 rounded px-1.5 py-1 text-[10px] text-gray-400 outline-none cursor-pointer font-mono focus:border-indigo-500"
       >
-        <option value="auto">比例: 自适应</option>
-        <option value="1:1">1:1</option>
-        <option value="3:4">3:4</option>
-        <option value="4:3">4:3</option>
-        <option value="9:16">9:16</option>
-        <option value="16:9">16:9</option>
+<option value="auto">比例: 自适应</option>
+<option value="1:1">1:1</option>
+<option value="3:4">3:4</option>
+<option value="4:3">4:3</option>
+<option value="9:16">9:16</option>
+<option value="16:9">16:9</option>
+<option value="21:9">21:9</option>
       </select>
 
       <select

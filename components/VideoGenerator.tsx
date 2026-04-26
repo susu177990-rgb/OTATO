@@ -632,12 +632,13 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
               onChange={e => setAspectRatio(e.target.value as AspectRatioType)}
               className="bg-transparent text-[10px] text-gray-500 outline-none cursor-pointer hover:text-gray-300 transition-colors font-mono"
             >
-              <option value="auto">比例: 自适应</option>
-              <option value="1:1">比例: 1:1</option>
-              <option value="3:4">比例: 3:4</option>
-              <option value="4:3">比例: 4:3</option>
-              <option value="9:16">比例: 9:16</option>
-              <option value="16:9">比例: 16:9</option>
+<option value="auto">比例: 自适应</option>
+<option value="1:1">比例: 1:1</option>
+<option value="3:4">比例: 3:4</option>
+<option value="4:3">比例: 4:3</option>
+<option value="9:16">比例: 9:16</option>
+<option value="16:9">比例: 16:9</option>
+<option value="21:9">比例: 21:9</option>
             </select>
 
             <div className="w-px h-3 bg-gray-800 shrink-0" />
