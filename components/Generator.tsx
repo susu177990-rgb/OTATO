@@ -15,9 +15,10 @@ import {
  Trash2,
  Key
 } from 'lucide-react';
-import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ImageSizeType, ProtocolConfig, CustomModelConfig } from '../types';
+import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ImageSizeType, ProtocolConfig, CustomModelConfig, ApiProviderType } from '../types';
 import { generateImage, downloadImage, isImageResult, fileToBase64 } from '../services/geminiService';
 import { getErrorMessage } from '../utils/errorUtils';
+import { GRSAI_DEFAULT_ENDPOINT } from '../constants';
 
 // ── 模型预设（侧边栏快速切换用） ──────────────────────────────────
 // 已移除内置预设，全部由用户自定义添加
@@ -49,7 +50,13 @@ const Generator: React.FC<GeneratorProps> = ({
   const [lastResult, setLastResult] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [showAddModel, setShowAddModel] = React.useState(false);
-  const [newModel, setNewModel] = React.useState({ name: '', modelName: '', endpointUrl: '', apiKey: '' });
+  const [newModel, setNewModel] = React.useState<{ name: string; modelName: string; endpointUrl: string; apiKey: string; apiProvider: ApiProviderType }>({
+    name: '',
+    modelName: '',
+    endpointUrl: '',
+    apiKey: '',
+    apiProvider: 'laozhang'
+  });
   const logEndRef = useRef<HTMLDivElement>(null);
 
   // 虽然不暴露 provider 切换开关，但直接把这两组模型做合并全量展示
@@ -166,7 +173,8 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
       name: newModel.name,
       modelName: newModel.modelName,
       endpointUrl: newModel.endpointUrl,
-      apiKey: newModel.apiKey
+      apiKey: newModel.apiKey,
+      apiProvider: newModel.apiProvider
     };
     setSettings(prev => ({
       ...prev,
@@ -175,8 +183,18 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
       savedApiKeys: { ...prev.savedApiKeys, [modelId]: newModel.apiKey }
     }));
     addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: `自定义模型「${newModel.name}」已保存` });
-    setNewModel({ name: '', modelName: '', endpointUrl: '', apiKey: '' });
+    setNewModel({ name: '', modelName: '', endpointUrl: '', apiKey: '', apiProvider: 'laozhang' });
     setShowAddModel(false);
+  };
+
+  const fillGrsaiGptImageModel = () => {
+    setNewModel(prev => ({
+      ...prev,
+      name: prev.name || 'GrsAi GPT Image 1.5',
+      modelName: 'gpt-image-1.5',
+      endpointUrl: GRSAI_DEFAULT_ENDPOINT,
+      apiProvider: 'grsai-gpt-image'
+    }));
   };
 
   // 删除自定义模型
@@ -197,7 +215,8 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
         modelName: model.modelName,
         presetId: model.id,
         endpointUrl: model.endpointUrl,
-        apiKey: model.apiKey || prev.savedApiKeys?.[model.id] || ''
+        apiKey: model.apiKey || prev.savedApiKeys?.[model.id] || '',
+        apiProvider: model.apiProvider || prev.apiConfig.apiProvider
       }
     }));
   };
@@ -308,6 +327,22 @@ return (
         onChange={e => setNewModel(prev => ({ ...prev, apiKey: e.target.value }))}
         className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none font-mono focus:border-indigo-500 placeholder-gray-600"
       />
+      <select
+        value={newModel.apiProvider}
+        onChange={e => setNewModel(prev => ({ ...prev, apiProvider: e.target.value as ApiProviderType }))}
+        className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-gray-300 outline-none font-mono focus:border-indigo-500"
+      >
+        <option value="laozhang">接口格式: OpenAI 兼容 Chat</option>
+        <option value="grsai-gpt-image">接口格式: GrsAi GPT Image</option>
+        <option value="grsai-nano-banana">接口格式: GrsAi Nano Banana</option>
+        <option value="openai-image">接口格式: OpenAI Images</option>
+      </select>
+      <button
+        onClick={fillGrsaiGptImageModel}
+        className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-400 rounded text-[10px] font-bold transition-colors"
+      >
+        <Zap size={10} /> 填入 GrsAi GPT Image
+      </button>
       <button
         onClick={handleSaveCustomModel}
         className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 rounded text-[10px] font-bold transition-colors"
@@ -329,7 +364,7 @@ return (
             <div key={m.id} className="group flex items-center">
               <button
                 onClick={() => setCustomModel(m)}
-                title={`${m.name}\n${m.endpointUrl}`}
+                title={`${m.name}\n${m.endpointUrl}\n${m.apiProvider || 'auto'}`}
                 className={`flex-1 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
                   isSelected
                     ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/20'
@@ -438,6 +473,8 @@ return (
       >
 <option value="auto">比例: 自适应</option>
 <option value="1:1">1:1</option>
+<option value="2:3">2:3</option>
+<option value="3:2">3:2</option>
 <option value="3:4">3:4</option>
 <option value="4:3">4:3</option>
 <option value="9:16">9:16</option>

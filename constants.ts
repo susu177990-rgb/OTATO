@@ -1,6 +1,6 @@
 import { AppSettings } from './types';
 
-export const GRSAI_DEFAULT_ENDPOINT = 'https://grsai.dakka.com.cn/v1/draw/nano-banana';
+export const GRSAI_DEFAULT_ENDPOINT = 'https://api.grsai.com/v1/draw/completions';
 export const KLING_MOTION_CONTROL_ENDPOINT = 'https://api.bltcy.ai/kling/v1/videos/motion-control';
 export const WAN_ANIMATE_MOVE_ENDPOINT = 'https://api.bltcy.ai/qwen/api/v1/services/aigc/image2video/video-synthesis';
 

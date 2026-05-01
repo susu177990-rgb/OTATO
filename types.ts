@@ -1,4 +1,4 @@
-export type AspectRatioType = 'auto' | '1:1' | '3:4' | '4:3' | '9:16' | '16:9' | '21:9';
+export type AspectRatioType = 'auto' | '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '9:16' | '16:9' | '21:9';
 export type ImageSizeType = '1K' | '2K' | '4K';
 
 export interface ProtocolConfig {
@@ -7,7 +7,7 @@ export interface ProtocolConfig {
   customPrompt?: string;
 }
 
-export type ApiProviderType = 'laozhang' | 'grsai';
+export type ApiProviderType = 'laozhang' | 'grsai' | 'grsai-gpt-image' | 'grsai-nano-banana' | 'openai-image';
 
 export interface ApiConfig {
   /** 完整 API 请求地址，如 https://api.bltcy.ai/v1/chat/completions */
@@ -24,6 +24,7 @@ export interface CustomModelConfig {
   modelName: string;
   endpointUrl: string;
   apiKey: string;
+  apiProvider?: ApiProviderType;
 }
 
 export interface AppSettings {
@@ -55,4 +56,3 @@ export interface GeneratedImage { /* 现在我们泛用于媒体，改名比较�
   modelUsed: string;
   parameters: any;
 }
-

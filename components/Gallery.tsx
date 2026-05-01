@@ -9,12 +9,14 @@ import JSZip from 'jszip';
 interface GalleryProps {
   images: GeneratedImage[];
   onDelete: (id: string) => Promise<void>;
+  onClear: () => Promise<void>;
   addLog: (entry: LogEntry) => void;
 }
 
-const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
+const Gallery: React.FC<GalleryProps> = ({ images, onDelete, onClear, addLog }) => {
   const [isZipping, setIsZipping] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isClearing, setIsClearing] = useState(false);
   const [lightboxImg, setLightboxImg] = useState<GeneratedImage | null>(null);
   const [lightboxFullUrl, setLightboxFullUrl] = useState<string | null>(null);
   const [lightboxLoading, setLightboxLoading] = useState(false);
@@ -37,6 +39,20 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
       addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `加载原图失败: ${getErrorMessage(e)}` });
     } finally {
       setLightboxLoading(false);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (images.length === 0 || isClearing) return;
+    if (!confirm(`确定要清空全部 ${images.length} 个画廊产物吗？此操作不可恢复。`)) return;
+    setIsClearing(true);
+    try {
+      await onClear();
+      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: '画廊缓存已清空' });
+    } catch (e) {
+      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `清空缓存失败: ${getErrorMessage(e)}` });
+    } finally {
+      setIsClearing(false);
     }
   };
 
@@ -132,14 +148,24 @@ const Gallery: React.FC<GalleryProps> = ({ images, onDelete, addLog }) => {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-white">画廊</h2>
         {images.length > 0 && (
-          <button
-            onClick={handleDownloadAll}
-            disabled={isZipping}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center gap-2 shadow-lg transition-all"
-          >
-            {isZipping ? <Activity className="animate-spin" size={14} /> : <Package size={14} />}
-            {isZipping ? "正在打包..." : `打包下载 (${images.length})`}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleClearAll}
+              disabled={isClearing || isZipping}
+              className="px-4 py-2 bg-red-600/80 hover:bg-red-500 disabled:bg-gray-800 disabled:text-gray-500 text-white rounded-lg text-xs font-bold flex items-center gap-2 shadow-lg transition-all"
+            >
+              {isClearing ? <Activity className="animate-spin" size={14} /> : <Trash2 size={14} />}
+              {isClearing ? "正在清空..." : "清空缓存"}
+            </button>
+            <button
+              onClick={handleDownloadAll}
+              disabled={isZipping || isClearing}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-800 disabled:text-gray-500 text-white rounded-lg text-xs font-bold flex items-center gap-2 shadow-lg transition-all"
+            >
+              {isZipping ? <Activity className="animate-spin" size={14} /> : <Package size={14} />}
+              {isZipping ? "正在打包..." : `打包下载 (${images.length})`}
+            </button>
+          </div>
         )}
       </div>
 

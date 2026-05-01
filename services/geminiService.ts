@@ -46,6 +46,75 @@ const base64ToBlob = (dataUrl: string): Blob => {
   return new Blob([array], { type: mimeType });
 };
 
+const isGptImageModel = (modelName: string): boolean => /^gpt-image-/i.test(modelName);
+
+const getOpenAIImageQuality = (imageSize: ProtocolConfig['imageSize']): 'low' | 'medium' | 'high' =>
+  imageSize === '4K' ? 'high' : imageSize === '2K' ? 'medium' : 'low';
+
+const roundToMultipleOf16 = (value: number): number => Math.max(16, Math.round(value / 16) * 16);
+
+const parseAspectRatio = (ratio: AspectRatioType): number | undefined => {
+  if (ratio === 'auto') return undefined;
+  const match = ratio.match(/^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/);
+  if (!match) return undefined;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined;
+  return width / height;
+};
+
+const getGptImage2Size = (ratio: AspectRatioType, imageSize: ProtocolConfig['imageSize']): string => {
+  const aspectRatio = parseAspectRatio(ratio) || 1;
+  const longToShortRatio = Math.max(aspectRatio, 1 / aspectRatio);
+  if (longToShortRatio > 3) {
+    throw new Error(`gpt-image-2 不支持超过 3:1 的极端比例：${ratio}`);
+  }
+
+  const longEdgeBySize = imageSize === '4K' ? 3840 : imageSize === '2K' ? 2048 : 1536;
+  let width: number;
+  let height: number;
+
+  if (aspectRatio >= 1) {
+    width = longEdgeBySize;
+    height = roundToMultipleOf16(longEdgeBySize / aspectRatio);
+  } else {
+    width = roundToMultipleOf16(longEdgeBySize * aspectRatio);
+    height = longEdgeBySize;
+  }
+
+  const maxPixels = imageSize === '4K' ? 8294400 : imageSize === '2K' ? 4194304 : 2359296;
+  while (width * height > maxPixels) {
+    width = roundToMultipleOf16(width * 0.98);
+    height = roundToMultipleOf16(height * 0.98);
+  }
+
+  return `${width}x${height}`;
+};
+
+const getOpenAIImageSize = (ratio: AspectRatioType, imageSize: ProtocolConfig['imageSize'], modelName: string): string => {
+  const normalizedRatio = ratio === 'auto' ? '1:1' : ratio;
+  if (!/^gpt-image-2$/i.test(modelName)) {
+    if (normalizedRatio === '16:9' || normalizedRatio === '4:3' || normalizedRatio === '3:2' || normalizedRatio === '21:9') return '1536x1024';
+    if (normalizedRatio === '9:16' || normalizedRatio === '3:4' || normalizedRatio === '2:3') return '1024x1536';
+    return '1024x1024';
+  }
+
+  return getGptImage2Size(normalizedRatio, imageSize);
+};
+
+const inferProvider = (apiConfig: ApiConfig): ApiConfig['apiProvider'] => {
+  const endpointUrl = apiConfig.endpointUrl || '';
+  const modelName = apiConfig.modelName || '';
+  if (apiConfig.apiProvider === 'grsai-gpt-image' || apiConfig.apiProvider === 'grsai-nano-banana' || apiConfig.apiProvider === 'openai-image') {
+    return apiConfig.apiProvider;
+  }
+  if (endpointUrl.includes('/draw/completions') || (endpointUrl.includes('grsai') && isGptImageModel(modelName))) return 'grsai-gpt-image';
+  if (endpointUrl.includes('/draw/nano-banana')) return 'grsai-nano-banana';
+  if (endpointUrl.includes('/images/') || isGptImageModel(modelName) || modelName.includes('dall-e')) return 'openai-image';
+  if (apiConfig.apiProvider === 'grsai' || endpointUrl.includes('grsai') || endpointUrl.includes('dakka')) return 'grsai-nano-banana';
+  return apiConfig.apiProvider || 'laozhang';
+};
+
 export const generateImage = async (
   config: ProtocolConfig,
   apiConfig: ApiConfig,
@@ -59,14 +128,15 @@ export const generateImage = async (
   if (!endpointUrl || !modelName || !apiKey) throw new Error("请先在设置中配置完整的 Endpoint URL、模型名和 API Key");
 
   const refs = await Promise.all(refImages.map(ensureBase64));
+  const provider = inferProvider(apiConfig);
 
-  if (apiConfig.apiProvider === 'grsai' || endpointUrl.includes('grsai') || endpointUrl.includes('dakka')) {
-    return generateViaGrsaiDraw(apiKey, endpointUrl, modelName, prompt, config, refs);
+  if (provider === 'grsai-gpt-image' || provider === 'grsai-nano-banana' || provider === 'grsai') {
+    return generateViaGrsaiDraw(apiKey, endpointUrl, modelName, prompt, config, refs, provider);
   }
   
   // 如果端点明确指向了 /images/... 或者是 dall-e 系列，则走原生图像生成（带多模态表单上传）通道
-  if (endpointUrl.includes('/images/') || modelName.includes('dall-e') || modelName === 'nano-banana-2') {
-    return generateViaDallE(apiKey, endpointUrl, modelName, prompt, config, refs);
+  if (provider === 'openai-image') {
+    return generateViaOpenAIImages(apiKey, endpointUrl, modelName, prompt, config, refs);
   }
 
   return generateViaOpenAICompatible(apiKey, endpointUrl, modelName, prompt, config, refs);
@@ -182,23 +252,31 @@ async function generateViaOpenAICompatible(
 // DALL-E / images 接口（用于 nano-banana-2 等）
 // endpointUrl 直接填写完整地址，如 https://api.xxx.com/v1/images/generations
 // ────────────────────────────────────────────────────────────────
-async function generateViaDallE(
+async function generateViaOpenAIImages(
   apiKey: string, endpointUrl: string, modelName: string, prompt: string, config: ProtocolConfig, refImages: string[] = []
 ): Promise<string> {
+  const size = getOpenAIImageSize(config.aspectRatio, config.imageSize, modelName);
+  const quality = getOpenAIImageQuality(config.imageSize);
 
   if (refImages.length === 0) {
+    const payload: Record<string, unknown> = {
+      model: modelName,
+      prompt,
+      n: 1,
+      size,
+    };
+    if (isGptImageModel(modelName)) {
+      payload.quality = quality;
+      payload.output_format = 'png';
+    }
+
     const response = await fetch(endpointUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model: modelName,
-        prompt,
-        n: 1,
-        image_size: config.imageSize,
-      }),
+      body: JSON.stringify(payload),
     });
     if (!response.ok) {
       const errBody = await response.text();
@@ -217,8 +295,12 @@ async function generateViaDallE(
   const formData = new FormData();
   formData.append('model', modelName);
   formData.append('prompt', prompt);
-  formData.append('image_size', config.imageSize);
+  formData.append('size', size);
   formData.append('n', '1');
+  if (isGptImageModel(modelName)) {
+    formData.append('quality', quality);
+    formData.append('output_format', 'png');
+  }
   refImages.forEach((img, i) => {
     const blob = base64ToBlob(img);
     const ext = blob.type.includes('png') ? 'png' : 'jpg';
@@ -247,9 +329,49 @@ async function generateViaDallE(
 const POLL_INTERVAL_MS = 1500;
 const POLL_MAX_ATTEMPTS = 120;
 
+const isGrsaiGptImageEndpoint = (endpointUrl: string, modelName: string): boolean =>
+  endpointUrl.includes('/draw/completions') || /^gpt-image-|^sora-image$/i.test(modelName);
+
+const parseGrsaiImageUrl = (data: any): string | undefined => {
+  if (!data) return undefined;
+  if (typeof data.url === 'string') return data.url;
+  if (typeof data.b64_json === 'string') return `data:image/png;base64,${data.b64_json}`;
+  if (Array.isArray(data.results) && data.results.length > 0) {
+    const first = data.results[0];
+    if (typeof first === 'string') return first;
+    if (typeof first?.url === 'string') return first.url;
+    if (typeof first?.b64_json === 'string') return `data:image/png;base64,${first.b64_json}`;
+  }
+  if (Array.isArray(data.data) && data.data.length > 0) return parseGrsaiImageUrl(data.data[0]);
+  return undefined;
+};
+
+const readGrsaiResponse = async (response: Response): Promise<any> => {
+  const text = await response.text();
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const payloads = lines.length > 0 ? lines : [text.trim()];
+  let lastPayload: any;
+
+  for (const line of payloads) {
+    const normalized = line.startsWith('data:') ? line.slice(5).trim() : line;
+    if (!normalized || normalized === '[DONE]') continue;
+    try {
+      const parsed = JSON.parse(normalized);
+      lastPayload = parsed;
+      if (parsed.progress === 100 || parsed.status === 'succeeded' || parsed.data?.status === 'succeeded') {
+        return parsed;
+      }
+    } catch (_) {
+      // Non-JSON progress lines are ignored; the API normally emits JSON or SSE JSON.
+    }
+  }
+
+  return lastPayload;
+};
+
 // ────────────────────────────────────────────────────────────────
 // Grsai 专属绘图接口（异步轮询）
-// endpointUrl 示例：https://grsai.dakka.com.cn/v1/draw/nano-banana
+// endpointUrl 示例：https://api.grsai.com/v1/draw/completions
 // ────────────────────────────────────────────────────────────────
 async function generateViaGrsaiDraw(
   apiKey: string,
@@ -257,21 +379,35 @@ async function generateViaGrsaiDraw(
   modelName: string,
   prompt: string,
   config: ProtocolConfig,
-  refImages: string[] = []
+  refImages: string[] = [],
+  provider: ApiConfig['apiProvider'] = 'grsai-nano-banana'
 ): Promise<string> {
 
   const urls: string[] = refImages.filter(
     (r) => r && (r.startsWith('http') || r.startsWith('data:'))
   );
 
-  const body: Record<string, unknown> = {
-    model: modelName,
-    prompt,
-    aspectRatio: config.aspectRatio,
-    imageSize: config.imageSize,
-    webHook: '-1',
-    shutProgress: true,
-  };
+  const useGptImagePayload = provider === 'grsai-gpt-image' || isGrsaiGptImageEndpoint(endpointUrl, modelName);
+  const gptImageSize = /^gpt-image-2$/i.test(modelName)
+    ? getOpenAIImageSize(config.aspectRatio, config.imageSize, modelName)
+    : config.aspectRatio;
+  const body: Record<string, unknown> = useGptImagePayload
+    ? {
+        model: modelName,
+        prompt,
+        size: gptImageSize,
+        quality: getOpenAIImageQuality(config.imageSize),
+        variants: 1,
+        webHook: '-1',
+      }
+    : {
+        model: modelName,
+        prompt,
+        aspectRatio: config.aspectRatio,
+        imageSize: config.imageSize,
+        webHook: '-1',
+        shutProgress: true,
+      };
   if (urls.length > 0) body.urls = urls;
 
   const response = await fetch(endpointUrl, {
@@ -288,13 +424,18 @@ async function generateViaGrsaiDraw(
     throw new Error(`API 错误 (${response.status}): ${errBody}`);
   }
 
-  const initData = await response.json();
-  if (initData.code !== 0 || !initData.data?.id) {
+  const initData = await readGrsaiResponse(response);
+  const immediateUrl = parseGrsaiImageUrl(initData?.data || initData);
+  if (immediateUrl) return ensureBase64(immediateUrl);
+
+  if (typeof initData?.code === 'number' && initData.code !== 0) {
     throw new Error(initData.msg || '未返回任务 ID');
   }
 
-  const taskId = initData.data.id;
-  // 轮询地址：将 draw/nano-banana 换为 draw/result
+  const taskId = initData?.data?.id || initData?.id || initData?.taskId;
+  if (!taskId) throw new Error(initData?.msg || '未返回任务 ID');
+
+  // 轮询地址：将 draw/completions 或 draw/nano-banana 换为 draw/result
   const resultUrl = endpointUrl.replace(/\/draw\/[^/]+$/, '/draw/result');
 
   for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
@@ -314,11 +455,11 @@ async function generateViaGrsaiDraw(
       throw new Error(`获取结果失败 (${resultRes.status}): ${errBody}`);
     }
 
-    const resultData = await resultRes.json();
+    const resultData = await readGrsaiResponse(resultRes);
     if (resultData.code === -22) throw new Error('任务不存在');
     if (resultData.code !== 0) throw new Error(resultData.msg || '获取结果失败');
 
-    const data = resultData.data;
+    const data = resultData.data || resultData;
     if (data.status === 'failed') {
       const reason = data.failure_reason || data.error || '未知错误';
       if (reason === 'output_moderation') throw new Error('输出违规');
@@ -326,10 +467,8 @@ async function generateViaGrsaiDraw(
       throw new Error(data.error || data.failure_reason || '生成失败');
     }
 
-    if (data.status === 'succeeded' && data.results?.[0]?.url) {
-      const imgUrl = data.results[0].url;
-      return ensureBase64(imgUrl);
-    }
+    const imgUrl = parseGrsaiImageUrl(data);
+    if (imgUrl && (!data.status || data.status === 'succeeded')) return ensureBase64(imgUrl);
   }
 
   throw new Error('生成超时，请稍后重试');

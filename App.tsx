@@ -6,7 +6,7 @@ import VideoGenerator from './components/VideoGenerator';
 import Gallery from './components/Gallery';
 import { GeneratedImage, LogEntry, AppSettings } from './types';
 import { DEFAULT_APP_SETTINGS } from './constants';
-import { persistImage, loadAllImages, deletePersistedImage } from './services/imageStorage';
+import { persistImage, loadAllImages, deletePersistedImage, clearPersistedImages } from './services/imageStorage';
 import { getErrorMessage } from './utils/errorUtils';
 
 const App: React.FC = () => {
@@ -34,6 +34,11 @@ const App: React.FC = () => {
   const handleDeleteImage = async (id: string) => {
     await deletePersistedImage(id);
     setGeneratedImages(prev => prev.filter(img => img.id !== id));
+  };
+
+  const handleClearImages = async () => {
+    await clearPersistedImages();
+    setGeneratedImages([]);
   };
 
   useEffect(() => {
@@ -145,7 +150,7 @@ const App: React.FC = () => {
           />
         </div>
         <div className={`h-full w-full ${activeView === 'GALLERY' ? 'block' : 'hidden'}`}>
-          <Gallery images={generatedImages} onDelete={handleDeleteImage} addLog={addLog} />
+          <Gallery images={generatedImages} onDelete={handleDeleteImage} onClear={handleClearImages} addLog={addLog} />
         </div>
       </main>
     </div>

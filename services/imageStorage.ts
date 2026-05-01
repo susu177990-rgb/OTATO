@@ -162,3 +162,18 @@ export async function deletePersistedImage(id: string): Promise<void> {
         await set('generatedImages', existing.filter(img => img.id !== id));
     }
 }
+
+/**
+ * 清空所有画廊产物缓存。
+ * - Electron：逐张删除磁盘文件，并清空元数据
+ * - 浏览器：清空 IndexedDB 中的 generatedImages
+ */
+export async function clearPersistedImages(): Promise<void> {
+    if (isElectron()) {
+        const meta = await loadMeta();
+        await Promise.all(meta.map(m => window.electronFS!.deleteImage(m.id)));
+        await saveMeta([]);
+    } else {
+        await set('generatedImages', []);
+    }
+}
