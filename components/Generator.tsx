@@ -66,6 +66,15 @@ const Generator: React.FC<GeneratorProps> = ({
   // 当前模型是否不在预设列表里
   const currentModelInPresets = modelPresets.some(m => m.id === settings.apiConfig.modelName);
 
+  const readImageDimensions = (src: string): Promise<{ width: number; height: number }> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      img.onerror = () => reject(new Error('读取图片尺寸失败'));
+      img.src = src;
+    });
+  };
+
   useEffect(() => {
     if (showLogs) logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs, showLogs]);
@@ -228,7 +237,7 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
     setError(null);
     const config: ProtocolConfig = { aspectRatio, imageSize, customPrompt: combinedPrompt };
     const startTime = Date.now();
-    addLog({ id: `start-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `开始生图 [${settings.apiConfig.modelName || '默认模型'}]...` });
+    addLog({ id: `start-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `开始生图 [${settings.apiConfig.modelName || '默认模型'}]，比例 ${aspectRatio}，画质 ${imageSize}...` });
 
     try {
       const resultUrl = await generateImage(config, settings.apiConfig, refImages);
@@ -249,6 +258,12 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
           } catch (cvtErr) {
             addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `URL转base64失败: ${getErrorMessage(cvtErr)}` });
           }
+        }
+        try {
+          const dimensions = await readImageDimensions(persistUrl);
+          addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `原图尺寸: ${dimensions.width}x${dimensions.height}` });
+        } catch (dimErr) {
+          addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `读取原图尺寸失败: ${getErrorMessage(dimErr)}` });
         }
         await addGeneratedImage({ id: Date.now().toString(), url: persistUrl, prompt: combinedPrompt, timestamp: Date.now(), modelUsed: settings.apiConfig.modelName, parameters: config });
       }

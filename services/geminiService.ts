@@ -108,9 +108,10 @@ const inferProvider = (apiConfig: ApiConfig): ApiConfig['apiProvider'] => {
   if (apiConfig.apiProvider === 'grsai-gpt-image' || apiConfig.apiProvider === 'grsai-nano-banana' || apiConfig.apiProvider === 'openai-image') {
     return apiConfig.apiProvider;
   }
+  if (endpointUrl.includes('/chat/completions')) return apiConfig.apiProvider || 'laozhang';
   if (endpointUrl.includes('/draw/completions') || (endpointUrl.includes('grsai') && isGptImageModel(modelName))) return 'grsai-gpt-image';
   if (endpointUrl.includes('/draw/nano-banana')) return 'grsai-nano-banana';
-  if (endpointUrl.includes('/images/') || isGptImageModel(modelName) || modelName.includes('dall-e')) return 'openai-image';
+  if (endpointUrl.includes('/images/') || modelName.includes('dall-e')) return 'openai-image';
   if (apiConfig.apiProvider === 'grsai' || endpointUrl.includes('grsai') || endpointUrl.includes('dakka')) return 'grsai-nano-banana';
   return apiConfig.apiProvider || 'laozhang';
 };
@@ -388,15 +389,12 @@ async function generateViaGrsaiDraw(
   );
 
   const useGptImagePayload = provider === 'grsai-gpt-image' || isGrsaiGptImageEndpoint(endpointUrl, modelName);
-  const gptImageSize = /^gpt-image-2$/i.test(modelName)
-    ? getOpenAIImageSize(config.aspectRatio, config.imageSize, modelName)
-    : config.aspectRatio;
   const body: Record<string, unknown> = useGptImagePayload
     ? {
         model: modelName,
         prompt,
-        size: gptImageSize,
-        quality: getOpenAIImageQuality(config.imageSize),
+        size: config.aspectRatio,
+        imageSize: config.imageSize,
         variants: 1,
         webHook: '-1',
       }
