@@ -13,7 +13,8 @@ import {
  Cpu,
  Save,
  Trash2,
- Key
+ Key,
+ Pencil
 } from 'lucide-react';
 import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ImageSizeType, ProtocolConfig, CustomModelConfig, ApiProviderType } from '../types';
 import { generateImage, downloadImage, isImageResult, fileToBase64 } from '../services/geminiService';
@@ -50,6 +51,7 @@ const Generator: React.FC<GeneratorProps> = ({
   const [lastResult, setLastResult] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [showAddModel, setShowAddModel] = React.useState(false);
+  const [editingModelId, setEditingModelId] = React.useState<string | null>(null);
   const [newModel, setNewModel] = React.useState<{ name: string; modelName: string; endpointUrl: string; apiKey: string; apiProvider: ApiProviderType }>({
     name: '',
     modelName: '',
@@ -176,7 +178,7 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
       addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: '请填写模型名称、模型名和API地址' });
       return;
     }
-    const modelId = `custom-${Date.now()}`;
+    const modelId = editingModelId || `custom-${Date.now()}`;
     const customModel: CustomModelConfig = {
       id: modelId,
       name: newModel.name,
@@ -185,13 +187,48 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
       apiKey: newModel.apiKey,
       apiProvider: newModel.apiProvider
     };
-    setSettings(prev => ({
-      ...prev,
-      customModels: [...(prev.customModels || []), customModel],
-      savedUrls: { ...prev.savedUrls, [modelId]: newModel.endpointUrl },
-      savedApiKeys: { ...prev.savedApiKeys, [modelId]: newModel.apiKey }
-    }));
-    addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: `自定义模型「${newModel.name}」已保存` });
+    setSettings(prev => {
+      const customModels = editingModelId
+        ? (prev.customModels || []).map(m => m.id === editingModelId ? customModel : m)
+        : [...(prev.customModels || []), customModel];
+      const isSelected = prev.apiConfig.presetId === modelId;
+
+      return {
+        ...prev,
+        customModels,
+        apiConfig: isSelected
+          ? {
+              ...prev.apiConfig,
+              modelName: customModel.modelName,
+              endpointUrl: customModel.endpointUrl,
+              apiKey: customModel.apiKey,
+              apiProvider: customModel.apiProvider,
+            }
+          : prev.apiConfig,
+        savedUrls: { ...prev.savedUrls, [modelId]: newModel.endpointUrl },
+        savedApiKeys: { ...prev.savedApiKeys, [modelId]: newModel.apiKey }
+      };
+    });
+    addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: editingModelId ? `自定义模型「${newModel.name}」已更新` : `自定义模型「${newModel.name}」已保存` });
+    setNewModel({ name: '', modelName: '', endpointUrl: '', apiKey: '', apiProvider: 'laozhang' });
+    setEditingModelId(null);
+    setShowAddModel(false);
+  };
+
+  const handleEditCustomModel = (model: CustomModelConfig) => {
+    setEditingModelId(model.id);
+    setNewModel({
+      name: model.name,
+      modelName: model.modelName,
+      endpointUrl: model.endpointUrl,
+      apiKey: model.apiKey || settings.savedApiKeys?.[model.id] || '',
+      apiProvider: model.apiProvider || 'laozhang',
+    });
+    setShowAddModel(true);
+  };
+
+  const handleCancelEditCustomModel = () => {
+    setEditingModelId(null);
     setNewModel({ name: '', modelName: '', endpointUrl: '', apiKey: '', apiProvider: 'laozhang' });
     setShowAddModel(false);
   };
@@ -303,7 +340,13 @@ return (
       <span className="text-[10px] font-bold uppercase font-mono text-gray-500 tracking-wider">模型</span>
     </div>
     <button
-      onClick={() => setShowAddModel(v => !v)}
+      onClick={() => {
+        if (showAddModel) {
+          handleCancelEditCustomModel();
+        } else {
+          setShowAddModel(true);
+        }
+      }}
       className="p-1 rounded hover:bg-gray-800/60 text-gray-500 hover:text-indigo-400 transition-colors"
       title="添加自定义模型"
     >
@@ -311,7 +354,7 @@ return (
     </button>
   </div>
 
-  {/* 添加自定义模型表单 */}
+  {/* 添加 / 编辑自定义模型表单 */}
   {showAddModel && (
     <div className="px-2 py-2 border-b border-gray-800/60 bg-black/20 space-y-1.5">
       <input
@@ -362,8 +405,16 @@ return (
         onClick={handleSaveCustomModel}
         className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 rounded text-[10px] font-bold transition-colors"
       >
-        <Save size={10} /> 保存模型
+        <Save size={10} /> {editingModelId ? '更新模型' : '保存模型'}
       </button>
+      {editingModelId && (
+        <button
+          onClick={handleCancelEditCustomModel}
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-gray-800/60 hover:bg-gray-800 text-gray-400 rounded text-[10px] font-bold transition-colors"
+        >
+          <X size={10} /> 取消编辑
+        </button>
+      )}
     </div>
   )}
 
@@ -387,6 +438,13 @@ return (
                 }`}
               >
                 {m.name}
+              </button>
+              <button
+                onClick={() => handleEditCustomModel(m)}
+                className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-indigo-400 transition-all"
+                title="编辑"
+              >
+                <Pencil size={10} />
               </button>
               <button
                 onClick={() => handleDeleteCustomModel(m.id)}

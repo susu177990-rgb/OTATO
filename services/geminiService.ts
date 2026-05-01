@@ -53,6 +53,17 @@ const getOpenAIImageQuality = (imageSize: ProtocolConfig['imageSize']): 'low' | 
 
 const roundToMultipleOf16 = (value: number): number => Math.max(16, Math.round(value / 16) * 16);
 
+const GPT_IMAGE_SIZE_BY_RATIO: Record<Exclude<AspectRatioType, 'auto'>, Record<ProtocolConfig['imageSize'], string>> = {
+  '1:1': { '1K': '1024x1024', '2K': '2048x2048', '4K': '2880x2880' },
+  '2:3': { '1K': '1024x1536', '2K': '1360x2048', '4K': '2352x3520' },
+  '3:2': { '1K': '1536x1024', '2K': '2048x1360', '4K': '3520x2352' },
+  '3:4': { '1K': '1152x1536', '2K': '1536x2048', '4K': '2480x3312' },
+  '4:3': { '1K': '1536x1152', '2K': '2048x1536', '4K': '3312x2480' },
+  '9:16': { '1K': '864x1536', '2K': '1152x2048', '4K': '2160x3840' },
+  '16:9': { '1K': '1536x864', '2K': '2048x1152', '4K': '3840x2160' },
+  '21:9': { '1K': '1536x656', '2K': '2048x880', '4K': '3840x1648' },
+};
+
 const parseAspectRatio = (ratio: AspectRatioType): number | undefined => {
   if (ratio === 'auto') return undefined;
   const match = ratio.match(/^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/);
@@ -63,14 +74,18 @@ const parseAspectRatio = (ratio: AspectRatioType): number | undefined => {
   return width / height;
 };
 
-const getGptImage2Size = (ratio: AspectRatioType, imageSize: ProtocolConfig['imageSize']): string => {
-  const aspectRatio = parseAspectRatio(ratio) || 1;
+const getGptImageSize = (ratio: AspectRatioType, imageSize: ProtocolConfig['imageSize']): string => {
+  const normalizedRatio = ratio === 'auto' ? '1:1' : ratio;
+  const configuredSize = GPT_IMAGE_SIZE_BY_RATIO[normalizedRatio]?.[imageSize];
+  if (configuredSize) return configuredSize;
+
+  const aspectRatio = parseAspectRatio(normalizedRatio) || 1;
   const longToShortRatio = Math.max(aspectRatio, 1 / aspectRatio);
   if (longToShortRatio > 3) {
     throw new Error(`gpt-image-2 不支持超过 3:1 的极端比例：${ratio}`);
   }
 
-  const longEdgeBySize = imageSize === '4K' ? 3840 : imageSize === '2K' ? 2048 : 1536;
+  const longEdgeBySize = imageSize === '4K' ? 3840 : imageSize === '2K' ? 2048 : normalizedRatio === '1:1' ? 1024 : 1536;
   let width: number;
   let height: number;
 
@@ -84,8 +99,8 @@ const getGptImage2Size = (ratio: AspectRatioType, imageSize: ProtocolConfig['ima
 
   const maxPixels = imageSize === '4K' ? 8294400 : imageSize === '2K' ? 4194304 : 2359296;
   while (width * height > maxPixels) {
-    width = roundToMultipleOf16(width * 0.98);
-    height = roundToMultipleOf16(height * 0.98);
+    width = Math.max(16, Math.floor(width * 0.98 / 16) * 16);
+    height = Math.max(16, Math.floor(height * 0.98 / 16) * 16);
   }
 
   return `${width}x${height}`;
@@ -99,7 +114,7 @@ const getOpenAIImageSize = (ratio: AspectRatioType, imageSize: ProtocolConfig['i
     return '1024x1024';
   }
 
-  return getGptImage2Size(normalizedRatio, imageSize);
+  return getGptImageSize(normalizedRatio, imageSize);
 };
 
 const inferProvider = (apiConfig: ApiConfig): ApiConfig['apiProvider'] => {
@@ -393,7 +408,9 @@ async function generateViaGrsaiDraw(
     ? {
         model: modelName,
         prompt,
-        size: config.aspectRatio,
+        size: getGptImageSize(config.aspectRatio, config.imageSize),
+        quality: getOpenAIImageQuality(config.imageSize),
+        aspectRatio: config.aspectRatio,
         imageSize: config.imageSize,
         variants: 1,
         webHook: '-1',
