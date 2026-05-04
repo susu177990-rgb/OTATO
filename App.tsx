@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Layers, Zap, Image, Settings as SettingsIcon, Terminal, Film } from 'lucide-react';
 import { get, set } from 'idb-keyval';
 import Generator from './components/Generator';
@@ -14,6 +14,7 @@ const App: React.FC = () => {
   const [showLogs, setShowLogs] = useState(true);
   const [isLoaded, setIsLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'SAVED' | 'SAVING'>('SAVED');
+  const logSeqRef = useRef(0);
 
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
@@ -21,7 +22,13 @@ const App: React.FC = () => {
     { id: '1', timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: '系统已初始化' },
   ]);
 
-  const addLog = (entry: LogEntry) => setLogs(prev => [...prev, entry]);
+  const addLog = (entry: LogEntry) => {
+    const uniqueEntry = {
+      ...entry,
+      id: `${entry.id}-${logSeqRef.current++}`
+    };
+    setLogs(prev => [...prev, uniqueEntry]);
+  };
 
   const addGeneratedImage = async (img: GeneratedImage) => {
     await persistImage(img);

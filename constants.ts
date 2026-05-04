@@ -14,7 +14,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   videoApiConfig: {
     endpointUrl: KLING_MOTION_CONTROL_ENDPOINT,
     apiKey: '',
-    modelName: 'kling-video-motion-control'
+    modelName: 'kling-video-motion-control',
+    presetId: 'kling-video-motion-control',
+    videoMode: 'motion-transfer'
   },
   savedApiKeys: {},
   savedUrls: {},

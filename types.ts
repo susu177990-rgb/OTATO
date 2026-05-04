@@ -1,5 +1,7 @@
 export type AspectRatioType = 'auto' | '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '9:16' | '16:9' | '21:9';
 export type ImageSizeType = '1K' | '2K' | '4K';
+export type VideoModeType = 'motion-transfer' | 'first-last-frame' | 'image-to-video';
+export type VideoResolutionType = 'auto' | '480p' | '720p' | '780P' | '1080p' | '480P' | '720P' | '1080P';
 
 export interface ProtocolConfig {
   aspectRatio: AspectRatioType;
@@ -16,6 +18,7 @@ export interface ApiConfig {
   modelName: string;
   presetId?: string;
   apiProvider?: ApiProviderType;
+  videoMode?: VideoModeType;
 }
 
 export interface CustomModelConfig {
@@ -25,6 +28,7 @@ export interface CustomModelConfig {
   endpointUrl: string;
   apiKey: string;
   apiProvider?: ApiProviderType;
+  videoMode?: VideoModeType;
 }
 
 export interface AppSettings {

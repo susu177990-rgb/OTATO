@@ -1,4 +1,4 @@
-import { ProtocolConfig, ApiConfig } from '../types';
+import { ProtocolConfig, ApiConfig, VideoResolutionType } from '../types';
 
 const POLL_MAX_ATTEMPTS = 120; // 120次 * 5秒 = 10分钟
 const POLL_INTERVAL = 5000;    // 5秒
@@ -13,6 +13,10 @@ type VideoGenerationConfig = Omit<ProtocolConfig, 'imageSize'> & {
   motionMode?: string;
   characterOrientation?: 'image' | 'video';
   keepOriginalSound?: boolean;
+  videoMode?: 'motion-transfer' | 'first-last-frame' | 'image-to-video';
+  videoResolution?: VideoResolutionType;
+  enhancePrompt?: boolean;
+  enableUpsample?: boolean;
 };
 
 const isMotionControlRequest = (apiConfig: ApiConfig): boolean =>
@@ -22,6 +26,28 @@ const isMotionControlRequest = (apiConfig: ApiConfig): boolean =>
 const isWanAnimateMoveRequest = (apiConfig: ApiConfig): boolean =>
   apiConfig?.modelName === 'wan2.2-animate-move' ||
   apiConfig?.endpointUrl?.includes('/qwen/api/v1/services/aigc/image2video/video-synthesis') === true;
+
+const isFirstLastFrameRequest = (apiConfig: ApiConfig, config?: VideoGenerationConfig): boolean =>
+  apiConfig?.videoMode === 'first-last-frame' || config?.videoMode === 'first-last-frame';
+
+const isVeoRequest = (modelName = ''): boolean => /veo/i.test(modelName);
+
+const isVeo31Request = (modelName = ''): boolean => /veo3\.1/i.test(modelName);
+
+const isSeedanceRequest = (modelName = ''): boolean => /seedance/i.test(modelName);
+
+const isSeedance15Request = (modelName = ''): boolean => /seedance-1-5/i.test(modelName);
+
+const normalizeVideoResolution = (resolution?: VideoResolutionType): string | undefined => {
+  if (!resolution || resolution === 'auto') return undefined;
+  if (/^\d+p$/i.test(resolution)) return resolution.toLowerCase();
+  return resolution;
+};
+
+const isImageToVideoRequest = (apiConfig: ApiConfig, config?: VideoGenerationConfig): boolean =>
+  (apiConfig?.videoMode === 'image-to-video' ||
+  config?.videoMode === 'image-to-video') &&
+  !isVeo31Request(apiConfig?.modelName);
 
 const normalizeMotionImage = (input: string): string => {
   if (!input.startsWith('data:')) return input;
@@ -173,7 +199,7 @@ const isSuccessStatus = (status: string): boolean =>
   ['SUCCESS', 'COMPLETED', 'SUCCEEDED', 'SUCCEED'].includes(status);
 
 const isFailureStatus = (status: string): boolean =>
-  ['FAILED', 'FAIL', 'CANCELED', 'CANCELLED'].includes(status);
+  ['FAILED', 'FAIL', 'FAILURE', 'CANCELED', 'CANCELLED'].includes(status);
 
 const getTaskOutputUrl = (taskData: any): string | null => {
   const candidates = [
@@ -190,13 +216,46 @@ const getTaskOutputUrl = (taskData: any): string | null => {
   return candidates.find((value): value is string => typeof value === 'string' && value.length > 0) || null;
 };
 
-const getApiErrorMessage = (data: any, fallback: string): string =>
-  data?.msg ||
-  data?.message ||
-  data?.error?.message ||
-  data?.error ||
-  data?.data?.task_status_msg ||
-  fallback;
+const stringifyErrorValue = (value: unknown): string | undefined => {
+  if (!value) return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+};
+
+const getApiErrorMessage = (data: any, fallback: string): string => {
+  const candidates = [
+    data?.msg,
+    data?.message,
+    data?.error?.message,
+    data?.error,
+    data?.upstream_message,
+    data?.upstream_error,
+    data?.data?.task_status_msg,
+    data?.data?.message,
+    data?.data?.error?.message,
+    data?.data?.error,
+    data?.data?.fail_reason,
+    data?.data?.failure_reason,
+    data?.data?.status_msg,
+    data?.data?.status_message,
+    data?.data?.output?.message,
+    data?.data?.output?.error?.message,
+    data?.data?.output?.error,
+    data?.output?.message,
+    data?.output?.error?.message,
+    data?.output?.error,
+    data?.task_status_msg,
+    data?.fail_reason,
+    data?.failure_reason,
+  ];
+
+  return candidates.map(stringifyErrorValue).find((value): value is string => Boolean(value?.trim())) || fallback;
+};
 
 const getTaskQueryUrl = (apiConfig: ApiConfig, taskId: string): string => {
   const endpointUrl = apiConfig?.endpointUrl?.trim() || '';
@@ -274,6 +333,12 @@ export const generateVideo = async (
   const prompt = config.customPrompt || '';
   const isMotionControl = isMotionControlRequest(apiConfig);
   const isWanAnimateMove = isWanAnimateMoveRequest(apiConfig);
+  const isImageToVideo = isImageToVideoRequest(apiConfig, config);
+  const isFirstLastFrame = !isImageToVideo && isFirstLastFrameRequest(apiConfig, config);
+  const isVeo = isVeoRequest(modelName);
+  const isSeedance = isSeedanceRequest(modelName);
+  const supportsVideoResolution = !isVeo && (!isSeedance || isSeedance15Request(modelName));
+  const videoResolution = normalizeVideoResolution(config.videoResolution);
 
   if (!endpointUrl || !apiKey || (!modelName && !isMotionControl && !isWanAnimateMove)) {
     throw new Error("请先在左侧边栏配置完整的 Video Endpoint URL、模型名和 API Key");
@@ -312,6 +377,24 @@ export const generateVideo = async (
     video_url: resolvedMotionVideoUrl,
     mode: config.motionMode === 'std' ? 'std' : 'pro',
     character_orientation: config.characterOrientation === 'image' ? 'image' : 'video',
+  } : isFirstLastFrame ? {
+    model: modelName,
+    prompt,
+    images: refImages.filter(Boolean).slice(0, 2),
+    aspect_ratio: config.aspectRatio === 'auto' ? '16:9' : config.aspectRatio,
+    ...(isVeo && config.enhancePrompt ? { enhance_prompt: true } : {}),
+    ...(isVeo && config.enableUpsample ? { enable_upsample: true } : {}),
+    ...(!isVeo && config.duration ? { duration: config.duration } : {}),
+    ...(supportsVideoResolution && videoResolution ? { resolution: videoResolution } : {}),
+  } : isImageToVideo ? {
+    model: modelName,
+    prompt,
+    images: refImages.filter(Boolean).slice(0, 1),
+    ...(isVeo && config.enhancePrompt ? { enhance_prompt: true } : {}),
+    ...(isVeo && config.enableUpsample ? { enable_upsample: true } : {}),
+    ...(config.aspectRatio !== 'auto' ? { aspect_ratio: config.aspectRatio } : {}),
+    ...(!isVeo && config.duration ? { duration: config.duration } : {}),
+    ...(!isVeo && videoResolution ? { resolution: videoResolution } : {}),
   } : isWanAnimateMove ? {
     model: modelName,
     input: {
@@ -327,11 +410,11 @@ export const generateVideo = async (
     aspect_ratio: config.aspectRatio === 'auto' ? '16:9' : config.aspectRatio,
   };
 
-  if (!isMotionControl && !isWanAnimateMove && config.duration) {
+  if (!isMotionControl && !isWanAnimateMove && !isFirstLastFrame && !isImageToVideo && config.duration) {
     payload.duration = config.duration;
   }
 
-  if (!isMotionControl && !isWanAnimateMove) {
+  if (!isMotionControl && !isWanAnimateMove && !isFirstLastFrame && !isImageToVideo) {
     const urls: string[] = refImages.filter(r => r && (r.startsWith('http') || r.startsWith('data:')));
     if (urls.length > 0) {
       payload.images = urls;
@@ -377,9 +460,13 @@ export const generateVideo = async (
         if (result.outputUrl) return result.outputUrl;
         throw new Error(`任务成功，但未解析到视频 URL: ${JSON.stringify(result.raw)}`);
       } else if (isFailureStatus(result.status)) {
-        throw new Error(`生成失败: ${getApiErrorMessage(result.raw, '未知错误')}`);
+        const detail = getApiErrorMessage(result.raw, '未知错误');
+        throw new Error(`生成失败: ${detail}\ntask_id=${taskId}`);
       }
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith('生成失败:')) {
+        throw error;
+      }
       console.error(`查询任务失败 task_id=${taskId}`, error);
       // 偶尔请求失败（可能网络抖动），不直接 throw，重试即可
       continue;
