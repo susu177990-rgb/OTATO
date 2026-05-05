@@ -369,7 +369,6 @@ async function generateViaOpenAIImages(
 }
 
 const POLL_INTERVAL_MS = 1500;
-const POLL_MAX_ATTEMPTS = 120;
 
 const isGrsaiGptImageEndpoint = (endpointUrl: string, modelName: string): boolean =>
   endpointUrl.includes('/draw/completions') || /^gpt-image-|^sora-image$/i.test(modelName);
@@ -477,7 +476,7 @@ async function generateViaGrsaiDraw(
   // 轮询地址：将 draw/completions 或 draw/nano-banana 换为 draw/result
   const resultUrl = endpointUrl.replace(/\/draw\/[^/]+$/, '/draw/result');
 
-  for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
+  for (;;) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 
     const resultRes = await fetch(resultUrl, {
@@ -509,8 +508,6 @@ async function generateViaGrsaiDraw(
     const imgUrl = parseGrsaiImageUrl(data);
     if (imgUrl && (!data.status || data.status === 'succeeded')) return ensureBase64(imgUrl);
   }
-
-  throw new Error('生成超时，请稍后重试');
 }
 
 export const fileToBase64 = (file: File): Promise<string> => {
