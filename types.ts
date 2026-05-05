@@ -1,11 +1,15 @@
 export type AspectRatioType = 'auto' | '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '9:16' | '16:9' | '21:9';
 export type ImageSizeType = '1K' | '2K' | '4K';
+/** GPT Image / Grsai 等：与 OpenAI 文档一致，默认可用 auto 由模型决定 */
+export type GptImageQualityType = 'auto' | 'low' | 'medium' | 'high';
 export type VideoModeType = 'motion-transfer' | 'first-last-frame' | 'image-to-video';
 export type VideoResolutionType = 'auto' | '480p' | '720p' | '780P' | '1080p' | '480P' | '720P' | '1080P';
 
 export interface ProtocolConfig {
   aspectRatio: AspectRatioType;
   imageSize: ImageSizeType;
+  /** 未传时由服务端按画质档位推断（兼容旧调用） */
+  imageQuality?: GptImageQualityType;
   customPrompt?: string;
 }
 

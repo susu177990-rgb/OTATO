@@ -16,10 +16,10 @@ import {
  Key,
  Pencil
 } from 'lucide-react';
-import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ImageSizeType, ProtocolConfig, CustomModelConfig, ApiProviderType } from '../types';
+import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ImageSizeType, GptImageQualityType, ProtocolConfig, CustomModelConfig, ApiProviderType } from '../types';
 import { generateImage, downloadImage, isImageResult, fileToBase64 } from '../services/geminiService';
 import { getErrorMessage } from '../utils/errorUtils';
-import { GRSAI_DEFAULT_ENDPOINT } from '../constants';
+import { GRSAI_DEFAULT_ENDPOINT, GRSAI_GPT_IMAGE2_VIP_MODEL } from '../constants';
 
 // ── 模型预设（侧边栏快速切换用） ──────────────────────────────────
 // 已移除内置预设，全部由用户自定义添加
@@ -47,6 +47,7 @@ const Generator: React.FC<GeneratorProps> = ({
   const [refImages, setRefImages] = React.useState<string[]>([]);
   const [aspectRatio, setAspectRatio] = React.useState<AspectRatioType>('auto');
   const [imageSize, setImageSize] = React.useState<ImageSizeType>('1K');
+  const [imageQuality, setImageQuality] = React.useState<GptImageQualityType>('auto');
   const [isGenerating, setIsGenerating] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -243,6 +244,16 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
     }));
   };
 
+  const fillGrsaiGptImage2VipModel = () => {
+    setNewModel(prev => ({
+      ...prev,
+      name: prev.name || 'GrsAi GPT Image 2 VIP (￥0.045/张)',
+      modelName: GRSAI_GPT_IMAGE2_VIP_MODEL,
+      endpointUrl: GRSAI_DEFAULT_ENDPOINT,
+      apiProvider: 'grsai-gpt-image'
+    }));
+  };
+
   // 删除自定义模型
   const handleDeleteCustomModel = (modelId: string) => {
     setSettings(prev => ({
@@ -272,9 +283,9 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
     if (!combinedPrompt) { setError('请输入提示词'); return; }
     setIsGenerating(true);
     setError(null);
-    const config: ProtocolConfig = { aspectRatio, imageSize, customPrompt: combinedPrompt };
+    const config: ProtocolConfig = { aspectRatio, imageSize, imageQuality, customPrompt: combinedPrompt };
     const startTime = Date.now();
-    addLog({ id: `start-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `开始生图 [${settings.apiConfig.modelName || '默认模型'}]，比例 ${aspectRatio}，画质 ${imageSize}...` });
+    addLog({ id: `start-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `开始生图 [${settings.apiConfig.modelName || '默认模型'}]，比例 ${aspectRatio}，分辨率 ${imageSize}，质量 ${imageQuality}...` });
 
     try {
       const resultUrl = await generateImage(config, settings.apiConfig, refImages);
@@ -395,12 +406,21 @@ return (
         <option value="grsai-nano-banana">接口格式: GrsAi Nano Banana</option>
         <option value="openai-image">接口格式: OpenAI Images</option>
       </select>
-      <button
-        onClick={fillGrsaiGptImageModel}
-        className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-400 rounded text-[10px] font-bold transition-colors"
-      >
-        <Zap size={10} /> 填入 GrsAi GPT Image
-      </button>
+      <div className="flex flex-col gap-1">
+        <button
+          onClick={fillGrsaiGptImageModel}
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-400 rounded text-[10px] font-bold transition-colors"
+        >
+          <Zap size={10} /> 填入 GrsAi GPT Image
+        </button>
+        <button
+          onClick={fillGrsaiGptImage2VipModel}
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-amber-600/15 hover:bg-amber-600/25 text-amber-400 rounded text-[10px] font-bold transition-colors"
+          title="公告模型 gpt-image-2-vip，￥0.045/张，1K/2K/4K + 质量 auto/low/medium/high"
+        >
+          <Zap size={10} /> 填入 GPT Image 2 VIP
+        </button>
+      </div>
       <button
         onClick={handleSaveCustomModel}
         className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 rounded text-[10px] font-bold transition-colors"
@@ -563,6 +583,20 @@ return (
         <option value="1K">1K</option>
         <option value="2K">2K</option>
         <option value="4K">4K</option>
+      </select>
+    </div>
+
+    <div className="px-3 pb-2 border-t border-gray-800/30">
+      <select
+        value={imageQuality}
+        onChange={e => setImageQuality(e.target.value as GptImageQualityType)}
+        className="w-full bg-black/40 border border-gray-700/80 rounded px-1.5 py-1 text-[10px] text-gray-400 outline-none cursor-pointer font-mono focus:border-indigo-500"
+        title="GPT Image / Grsai：对应 low / medium / high / auto（默认 auto）"
+      >
+        <option value="auto">质量: auto（默认）</option>
+        <option value="low">low</option>
+        <option value="medium">medium</option>
+        <option value="high">high</option>
       </select>
     </div>
 

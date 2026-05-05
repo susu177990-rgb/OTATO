@@ -1,4 +1,4 @@
-import { ProtocolConfig, ApiConfig, AspectRatioType } from '../types';
+import { ProtocolConfig, ApiConfig, AspectRatioType, GptImageQualityType } from '../types';
 
 const SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
@@ -46,10 +46,20 @@ const base64ToBlob = (dataUrl: string): Blob => {
   return new Blob([array], { type: mimeType });
 };
 
+/** OpenAI GPT Image：内容审核严格程度，中转站若支持会透传 */
+const GPT_IMAGE_MODERATION: 'low' | 'auto' = 'low';
+
 const isGptImageModel = (modelName: string): boolean => /^gpt-image-/i.test(modelName);
+
+/** gpt-image-2、gpt-image-2-vip：与 OpenAI 文档相同的自定义 size 约束 */
+const usesGptImage2StyleResolution = (modelName: string): boolean =>
+  /^gpt-image-2(-vip)?$/i.test(modelName.trim());
 
 const getOpenAIImageQuality = (imageSize: ProtocolConfig['imageSize']): 'low' | 'medium' | 'high' =>
   imageSize === '4K' ? 'high' : imageSize === '2K' ? 'medium' : 'low';
+
+const resolveGptImageQuality = (config: ProtocolConfig): GptImageQualityType =>
+  config.imageQuality ?? getOpenAIImageQuality(config.imageSize);
 
 const roundToMultipleOf16 = (value: number): number => Math.max(16, Math.round(value / 16) * 16);
 
@@ -106,9 +116,23 @@ const getGptImageSize = (ratio: AspectRatioType, imageSize: ProtocolConfig['imag
   return `${width}x${height}`;
 };
 
+/**
+ * Grsai GPT Image 文档：aspectRatio 可为比例字符串或像素 "WxH"（gpt-image-2 / vip 用本应用计算的像素）。
+ * 非 gpt-image-2 系模型仅传比例/auto，由服务端解析。
+ */
+const getGrsaiGptImageAspectRatioParam = (modelName: string, config: ProtocolConfig): string => {
+  if (usesGptImage2StyleResolution(modelName)) {
+    return getGptImageSize(config.aspectRatio, config.imageSize);
+  }
+  if (isGptImageModel(modelName)) {
+    return getOpenAIImageSize(config.aspectRatio, config.imageSize, modelName);
+  }
+  return config.aspectRatio === 'auto' ? 'auto' : config.aspectRatio;
+};
+
 const getOpenAIImageSize = (ratio: AspectRatioType, imageSize: ProtocolConfig['imageSize'], modelName: string): string => {
   const normalizedRatio = ratio === 'auto' ? '1:1' : ratio;
-  if (!/^gpt-image-2$/i.test(modelName)) {
+  if (!usesGptImage2StyleResolution(modelName)) {
     if (normalizedRatio === '16:9' || normalizedRatio === '4:3' || normalizedRatio === '3:2' || normalizedRatio === '21:9') return '1536x1024';
     if (normalizedRatio === '9:16' || normalizedRatio === '3:4' || normalizedRatio === '2:3') return '1024x1536';
     return '1024x1024';
@@ -272,7 +296,7 @@ async function generateViaOpenAIImages(
   apiKey: string, endpointUrl: string, modelName: string, prompt: string, config: ProtocolConfig, refImages: string[] = []
 ): Promise<string> {
   const size = getOpenAIImageSize(config.aspectRatio, config.imageSize, modelName);
-  const quality = getOpenAIImageQuality(config.imageSize);
+  const quality = resolveGptImageQuality(config);
 
   if (refImages.length === 0) {
     const payload: Record<string, unknown> = {
@@ -284,6 +308,7 @@ async function generateViaOpenAIImages(
     if (isGptImageModel(modelName)) {
       payload.quality = quality;
       payload.output_format = 'png';
+      payload.moderation = GPT_IMAGE_MODERATION;
     }
 
     const response = await fetch(endpointUrl, {
@@ -316,6 +341,7 @@ async function generateViaOpenAIImages(
   if (isGptImageModel(modelName)) {
     formData.append('quality', quality);
     formData.append('output_format', 'png');
+    formData.append('moderation', GPT_IMAGE_MODERATION);
   }
   refImages.forEach((img, i) => {
     const blob = base64ToBlob(img);
@@ -387,7 +413,7 @@ const readGrsaiResponse = async (response: Response): Promise<any> => {
 
 // ────────────────────────────────────────────────────────────────
 // Grsai 专属绘图接口（异步轮询）
-// endpointUrl 示例：https://api.grsai.com/v1/draw/completions
+// GPT Image 文档示例：https://grsai.dakka.com.cn/v1/draw/completions ；webHook="-1" 立即返回 id 后轮询 /v1/draw/result
 // ────────────────────────────────────────────────────────────────
 async function generateViaGrsaiDraw(
   apiKey: string,
@@ -408,11 +434,9 @@ async function generateViaGrsaiDraw(
     ? {
         model: modelName,
         prompt,
-        size: getGptImageSize(config.aspectRatio, config.imageSize),
-        quality: getOpenAIImageQuality(config.imageSize),
-        aspectRatio: config.aspectRatio,
-        imageSize: config.imageSize,
-        variants: 1,
+        aspectRatio: getGrsaiGptImageAspectRatioParam(modelName, config),
+        quality: resolveGptImageQuality(config),
+        moderation: GPT_IMAGE_MODERATION,
         webHook: '-1',
       }
     : {
