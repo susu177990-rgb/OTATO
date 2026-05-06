@@ -19,12 +19,7 @@ import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ProtocolConfig,
 import { downloadImage, fileToBase64 } from '../services/geminiService';
 import { generateVideo, queryVideoTask } from '../services/videoService';
 import { getErrorMessage } from '../utils/errorUtils';
-import { KLING_MOTION_CONTROL_ENDPOINT } from '../constants';
-
-const KLING_MOTION_CONTROL_MODEL_ID = 'kling-video-motion-control';
-const VIDEO_MODEL_PRESETS: Array<{ id: string; name: string; videoMode: VideoModeType }> = [
-  { id: KLING_MOTION_CONTROL_MODEL_ID, name: 'Kling 动作迁移', videoMode: 'motion-transfer' },
-];
+import { KLING_MOTION_CONTROL_ENDPOINT, DEFAULT_KLING_MOTION_VIDEO_PRESET_ID, DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL, isDefaultFixedVideoPreset } from '../constants';
 
 const getVideoModeLabel = (mode?: VideoModeType): string => {
   if (mode === 'motion-transfer') return '动作迁移';
@@ -86,27 +81,27 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const videoApiConfig = settings.videoApiConfig || {
-    endpointUrl: KLING_MOTION_CONTROL_ENDPOINT,
-    apiKey: '',
-    modelName: KLING_MOTION_CONTROL_MODEL_ID,
-    presetId: KLING_MOTION_CONTROL_MODEL_ID,
-    videoMode: 'motion-transfer'
+    endpointUrl: DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.endpointUrl,
+    apiKey: DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.apiKey,
+    modelName: DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.modelName,
+    presetId: DEFAULT_KLING_MOTION_VIDEO_PRESET_ID,
+    videoMode: 'motion-transfer',
   };
-  const selectedVideoModel = [
-    ...VIDEO_MODEL_PRESETS,
-    ...(settings.videoCustomModels || []),
-  ].find(m => m.id === videoApiConfig.presetId);
+  const defaultVideoModelRows = (settings.videoCustomModels || []).filter((m) => isDefaultFixedVideoPreset(m.id));
+  const otherVideoModels = (settings.videoCustomModels || []).filter((m) => !isDefaultFixedVideoPreset(m.id));
+  const selectedVideoModel = (settings.videoCustomModels || []).find((m) => m.id === videoApiConfig.presetId);
   const configuredVideoMode = videoApiConfig.videoMode || selectedVideoModel?.videoMode;
   const currentVideoMode: VideoModeType =
     configuredVideoMode === 'image-to-video' && isVeo31Model(videoApiConfig.modelName)
       ? 'first-last-frame'
       :
     configuredVideoMode ||
-    (videoApiConfig.modelName === KLING_MOTION_CONTROL_MODEL_ID || videoApiConfig.endpointUrl.includes('/kling/v1/videos/motion-control')
+    (videoApiConfig.modelName === DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.modelName ||
+      videoApiConfig.endpointUrl.includes('/kling/v1/videos/motion-control')
       ? 'motion-transfer'
       : 'first-last-frame');
   const isKlingMotionControlModel =
-    videoApiConfig.modelName === KLING_MOTION_CONTROL_MODEL_ID ||
+    videoApiConfig.modelName === DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.modelName ||
     videoApiConfig.endpointUrl.includes('/kling/v1/videos/motion-control');
   const isMotionControlModel = currentVideoMode === 'motion-transfer';
   const isFirstLastFrameMode = currentVideoMode === 'first-last-frame';
@@ -143,31 +138,27 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
 
   useEffect(() => {
     if (!isActive) return;
-    const selectedBuiltInModel = VIDEO_MODEL_PRESETS.some(m => m.id === videoApiConfig.presetId);
-    const selectedCustomModel = (settings.videoCustomModels || []).some(m => m.id === videoApiConfig.presetId);
+    const selectedKnownModel = (settings.videoCustomModels || []).some((m) => m.id === videoApiConfig.presetId);
 
-    if (
-      (selectedBuiltInModel || selectedCustomModel) &&
-      videoApiConfig.endpointUrl
-    ) {
+    if (selectedKnownModel && videoApiConfig.endpointUrl) {
       return;
     }
 
-    setSettings(prev => {
+    setSettings((prev) => {
       const currentConfig = prev.videoApiConfig || videoApiConfig;
       const endpointUrl = currentConfig.endpointUrl?.includes('/kling/v1/videos/motion-control')
         ? currentConfig.endpointUrl
-        : (prev.savedUrls?.[KLING_MOTION_CONTROL_MODEL_ID] || KLING_MOTION_CONTROL_ENDPOINT);
+        : prev.savedUrls?.[DEFAULT_KLING_MOTION_VIDEO_PRESET_ID] || KLING_MOTION_CONTROL_ENDPOINT;
 
       return {
         ...prev,
         videoApiConfig: {
           ...currentConfig,
           endpointUrl,
-          modelName: KLING_MOTION_CONTROL_MODEL_ID,
-          presetId: KLING_MOTION_CONTROL_MODEL_ID,
+          modelName: DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.modelName,
+          presetId: DEFAULT_KLING_MOTION_VIDEO_PRESET_ID,
           videoMode: 'motion-transfer',
-        }
+        },
       };
     });
   }, [isActive, setSettings, settings.videoCustomModels, videoApiConfig]);
@@ -258,31 +249,11 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
 
   const clearMotionVideo = () => setMotionVideoFile(null);
 
-  const removeRefImage = (idx: number) => setRefImages(prev => prev.filter((_, i) => i !== idx));
+  const removeRefImage = (idx: number) => setRefImages((prev) => prev.filter((_, i) => i !== idx));
 
-  const addPrompt    = () => setPrompts(prev => [...prev, '']);
+  const addPrompt = () => setPrompts((prev) => [...prev, '']);
   const removePrompt = (idx: number) => setPrompts(prev => prev.filter((_, i) => i !== idx));
   const updatePrompt = (idx: number, val: string) => setPrompts(prev => prev.map((p, i) => i === idx ? val : p));
-
-  const setModel = (modelId: string) => {
-    const preset = VIDEO_MODEL_PRESETS.find(m => m.id === modelId);
-    setSettings(prev => {
-      const currentConfig = prev.videoApiConfig || videoApiConfig;
-      const newEndpointUrl = prev.savedUrls?.[modelId] || currentConfig.endpointUrl || KLING_MOTION_CONTROL_ENDPOINT;
-      const newApiKey = prev.savedApiKeys?.[modelId] ?? currentConfig.apiKey ?? '';
-      return {
-        ...prev,
-        videoApiConfig: {
-          ...currentConfig,
-          modelName: modelId,
-          presetId: modelId,
-          endpointUrl: newEndpointUrl,
-          apiKey: newApiKey,
-          videoMode: preset?.videoMode || 'motion-transfer'
-        }
-      };
-    });
-  };
 
   const handleSaveCustomModel = () => {
     if (!newModel.name || !newModel.modelName || !newModel.endpointUrl) {
@@ -355,11 +326,15 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
       videoApiConfig: prev.videoApiConfig?.presetId === modelId
         ? {
             ...prev.videoApiConfig,
-            modelName: KLING_MOTION_CONTROL_MODEL_ID,
-            presetId: KLING_MOTION_CONTROL_MODEL_ID,
-            endpointUrl: prev.savedUrls?.[KLING_MOTION_CONTROL_MODEL_ID] || KLING_MOTION_CONTROL_ENDPOINT,
-            apiKey: prev.savedApiKeys?.[KLING_MOTION_CONTROL_MODEL_ID] || '',
-            videoMode: 'motion-transfer'
+            modelName: DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.modelName,
+            presetId: DEFAULT_KLING_MOTION_VIDEO_PRESET_ID,
+            endpointUrl:
+              prev.savedUrls?.[DEFAULT_KLING_MOTION_VIDEO_PRESET_ID] ||
+              DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.endpointUrl,
+            apiKey:
+              prev.savedApiKeys?.[DEFAULT_KLING_MOTION_VIDEO_PRESET_ID] ??
+              DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.apiKey,
+            videoMode: 'motion-transfer',
           }
         : prev.videoApiConfig
     }));
@@ -558,10 +533,11 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
               className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none font-mono focus:border-indigo-500 placeholder-gray-600"
             />
             <input
-              type="text"
+              type="password"
               placeholder="API Key (可选)"
               value={newModel.apiKey}
               onChange={e => setNewModel(prev => ({ ...prev, apiKey: e.target.value }))}
+              autoComplete="new-password"
               className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none font-mono focus:border-indigo-500 placeholder-gray-600"
             />
             <div className="grid grid-cols-3 gap-1">
@@ -617,24 +593,32 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
         )}
 
         <div className="flex-1 overflow-y-auto custom-scrollbar py-1.5 px-2 space-y-1">
-          {settings.videoCustomModels && settings.videoCustomModels.length > 0 && (
+          {defaultVideoModelRows.length > 0 && (
             <div className="space-y-0.5">
-              {settings.videoCustomModels.map(m => {
+              <div className="px-1 pb-1 flex items-center gap-2 border-b border-gray-800/60">
+                <span className="text-[9px] font-bold uppercase font-mono text-gray-500 tracking-wider">默认</span>
+              </div>
+              {defaultVideoModelRows.map((m) => {
                 const isSelected = settings.videoApiConfig?.presetId === m.id;
                 return (
                   <div key={m.id} className="group flex items-center">
                     <button
+                      type="button"
                       onClick={() => setCustomModel(m)}
                       title={`${m.name}\n${m.endpointUrl}\n${getVideoModeLabel(m.videoMode)}`}
-                      className={`flex-1 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
+                      className={`flex flex-1 min-w-0 items-center gap-1.5 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
                         isSelected
                           ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/20'
-                          : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
+                          : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60 border border-transparent'
                       }`}
                     >
-                      {m.name}
+                      <span className="truncate">{m.name}</span>
+                      <span className="shrink-0 px-1 py-px rounded-[3px] text-[8px] font-bold uppercase tracking-wide bg-slate-700/70 text-slate-400 border border-slate-600/40">
+                        默认
+                      </span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => handleEditCustomModel(m)}
                       className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-indigo-400 transition-all"
                       title="编辑"
@@ -642,6 +626,7 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
                       <Pencil size={10} />
                     </button>
                     <button
+                      type="button"
                       onClick={() => handleDeleteCustomModel(m.id)}
                       className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all"
                       title="删除"
@@ -654,25 +639,50 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
             </div>
           )}
 
-          <div className="space-y-0.5">
-            {VIDEO_MODEL_PRESETS.map(m => {
-              const isSelected = settings.videoApiConfig?.presetId === m.id;
-              return (
-                <button
-                  key={m.id}
-                  onClick={() => setModel(m.id)}
-                  title={m.id}
-                  className={`w-full text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
-                    isSelected
-                      ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/20'
-                      : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
-                  }`}
-                >
-                  {m.name}
-                </button>
-              );
-            })}
-          </div>
+          {otherVideoModels.length > 0 && (
+            <div className="space-y-0.5">
+              {defaultVideoModelRows.length > 0 && (
+                <div className="px-1 pb-1 pt-2 flex items-center gap-2 border-b border-gray-800/60">
+                  <span className="text-[9px] font-bold uppercase font-mono text-gray-500 tracking-wider">自定义</span>
+                </div>
+              )}
+              {otherVideoModels.map((m) => {
+                const isSelected = settings.videoApiConfig?.presetId === m.id;
+                return (
+                  <div key={m.id} className="group flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => setCustomModel(m)}
+                      title={`${m.name}\n${m.endpointUrl}\n${getVideoModeLabel(m.videoMode)}`}
+                      className={`flex-1 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
+                        isSelected
+                          ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/20'
+                          : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
+                      }`}
+                    >
+                      {m.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEditCustomModel(m)}
+                      className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-indigo-400 transition-all"
+                      title="编辑"
+                    >
+                      <Pencil size={10} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCustomModel(m.id)}
+                      className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all"
+                      title="删除"
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="flex-shrink-0 border-t border-gray-800/60 bg-gray-950/50 flex flex-col">

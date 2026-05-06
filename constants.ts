@@ -81,7 +81,44 @@ export function isDefaultFixedChatPreset(id: string): boolean {
 }
 
 export const KLING_MOTION_CONTROL_ENDPOINT = 'https://api.bltcy.ai/kling/v1/videos/motion-control';
+export const BLTCY_VEO31_VIDEO_ENDPOINT = 'https://api.bltcy.ai/v2/videos/generations';
+/** veo3.1 专用 Key（与生图 Key 不同） */
+export const BLTCY_VEO31_VIDEO_API_KEY =
+  'sk-7y7IbjGsza6M7Wxx6MOYAWe7uoR0m9XUoB0lmwAM5jgz70sf';
+
 export const WAN_ANIMATE_MOVE_ENDPOINT = 'https://api.bltcy.ai/qwen/api/v1/services/aigc/image2video/video-synthesis';
+
+/** 内置默认可编辑视频模型（与 VideoGenerator 列表同源） */
+export const DEFAULT_KLING_MOTION_VIDEO_PRESET_ID = 'kling-video-motion-control';
+export const DEFAULT_VEO31_VIDEO_PRESET_ID = 'bltcy-veo-3-1';
+
+export const DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL: CustomModelConfig = {
+  id: DEFAULT_KLING_MOTION_VIDEO_PRESET_ID,
+  name: 'Kling 动作迁移',
+  modelName: 'kling-video-motion-control',
+  endpointUrl: KLING_MOTION_CONTROL_ENDPOINT,
+  apiKey: BLTCY_SHARED_IMAGE_API_KEY,
+  videoMode: 'motion-transfer',
+};
+
+export const DEFAULT_VEO31_VIDEO_CUSTOM_MODEL: CustomModelConfig = {
+  id: DEFAULT_VEO31_VIDEO_PRESET_ID,
+  name: 'veo3.1',
+  modelName: 'veo3.1',
+  endpointUrl: BLTCY_VEO31_VIDEO_ENDPOINT,
+  apiKey: BLTCY_VEO31_VIDEO_API_KEY,
+  videoMode: 'first-last-frame',
+};
+
+/** 顺序：Kling 动作迁移 → veo3.1（首尾帧） */
+export const DEFAULT_FIXED_VIDEO_CUSTOM_MODELS: CustomModelConfig[] = [
+  DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL,
+  DEFAULT_VEO31_VIDEO_CUSTOM_MODEL,
+];
+
+export function isDefaultFixedVideoPreset(id: string): boolean {
+  return DEFAULT_FIXED_VIDEO_CUSTOM_MODELS.some(m => m.id === id);
+}
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   apiConfig: {
@@ -99,20 +136,20 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     presetId: DEFAULT_CHAT_GPT55_PRESET_ID,
   },
   videoApiConfig: {
-    endpointUrl: KLING_MOTION_CONTROL_ENDPOINT,
-    apiKey: '',
-    modelName: 'kling-video-motion-control',
-    presetId: 'kling-video-motion-control',
+    endpointUrl: DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.endpointUrl,
+    apiKey: DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.apiKey,
+    modelName: DEFAULT_KLING_MOTION_VIDEO_CUSTOM_MODEL.modelName,
+    presetId: DEFAULT_KLING_MOTION_VIDEO_PRESET_ID,
     videoMode: 'motion-transfer',
   },
-  savedUrls: Object.fromEntries(DEFAULT_FIXED_CUSTOM_MODELS.map(m => [m.id, m.endpointUrl])) as Record<
-    string,
-    string
-  >,
-  savedApiKeys: Object.fromEntries(DEFAULT_FIXED_CUSTOM_MODELS.map(m => [m.id, m.apiKey])) as Record<
-    string,
-    string
-  >,
+  savedUrls: {
+    ...Object.fromEntries(DEFAULT_FIXED_CUSTOM_MODELS.map(m => [m.id, m.endpointUrl])),
+    ...Object.fromEntries(DEFAULT_FIXED_VIDEO_CUSTOM_MODELS.map(m => [m.id, m.endpointUrl])),
+  } as Record<string, string>,
+  savedApiKeys: {
+    ...Object.fromEntries(DEFAULT_FIXED_CUSTOM_MODELS.map(m => [m.id, m.apiKey])),
+    ...Object.fromEntries(DEFAULT_FIXED_VIDEO_CUSTOM_MODELS.map(m => [m.id, m.apiKey])),
+  } as Record<string, string>,
   chatSavedUrls: Object.fromEntries(DEFAULT_FIXED_CHAT_CUSTOM_MODELS.map(m => [m.id, m.endpointUrl])) as Record<
     string,
     string
@@ -123,4 +160,5 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   >,
   customModels: [...DEFAULT_FIXED_CUSTOM_MODELS],
   chatCustomModels: [...DEFAULT_FIXED_CHAT_CUSTOM_MODELS],
+  videoCustomModels: [...DEFAULT_FIXED_VIDEO_CUSTOM_MODELS],
 };

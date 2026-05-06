@@ -595,6 +595,7 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
               placeholder="API Key"
               value={newModel.apiKey}
               onChange={e => setNewModel(p => ({ ...p, apiKey: e.target.value }))}
+              autoComplete="new-password"
               className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none font-mono focus:border-indigo-500 placeholder-gray-600"
             />
             <p className="text-[9px] text-gray-600 leading-tight">

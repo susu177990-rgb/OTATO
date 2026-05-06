@@ -6,7 +6,12 @@ import VideoGenerator from './components/VideoGenerator';
 import ChatView from './components/ChatView';
 import Gallery from './components/Gallery';
 import { GeneratedImage, LogEntry, AppSettings } from './types';
-import { DEFAULT_APP_SETTINGS, DEFAULT_FIXED_CHAT_CUSTOM_MODELS, DEFAULT_FIXED_CUSTOM_MODELS } from './constants';
+import {
+  DEFAULT_APP_SETTINGS,
+  DEFAULT_FIXED_CHAT_CUSTOM_MODELS,
+  DEFAULT_FIXED_CUSTOM_MODELS,
+  DEFAULT_FIXED_VIDEO_CUSTOM_MODELS,
+} from './constants';
 import { persistImage, loadAllImages, deletePersistedImage, clearPersistedImages } from './services/imageStorage';
 import { getErrorMessage } from './utils/errorUtils';
 
@@ -20,7 +25,13 @@ function normalizeLoadedSettings(raw: Partial<AppSettings>): AppSettings {
       customModels = [fixed, ...customModels];
     }
   }
-  const videoCustomModels = raw.videoCustomModels ?? [];
+  let videoCustomModels = [...(raw.videoCustomModels ?? [])];
+  for (let i = DEFAULT_FIXED_VIDEO_CUSTOM_MODELS.length - 1; i >= 0; i--) {
+    const fixed = DEFAULT_FIXED_VIDEO_CUSTOM_MODELS[i];
+    if (!videoCustomModels.some(m => m.id === fixed.id)) {
+      videoCustomModels = [fixed, ...videoCustomModels];
+    }
+  }
   let agentImagePresetId = raw.agentImagePresetId;
   if (agentImagePresetId && !customModels.some(m => m.id === agentImagePresetId)) {
     agentImagePresetId = undefined;
