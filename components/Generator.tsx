@@ -13,16 +13,14 @@ import {
  Cpu,
  Save,
  Trash2,
- Key,
  Pencil,
 } from 'lucide-react';
 import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ImageSizeType, GptImageQualityType, ProtocolConfig, CustomModelConfig, ApiProviderType } from '../types';
 import { generateImage, downloadImage, isImageResult, fileToBase64 } from '../services/geminiService';
 import { getErrorMessage } from '../utils/errorUtils';
-import { GRSAI_DEFAULT_ENDPOINT, GRSAI_GPT_IMAGE2_VIP_MODEL } from '../constants';
+import { DEFAULT_FIXED_CUSTOM_MODELS, isDefaultFixedImagePreset } from '../constants';
 
 // ── 模型预设（侧边栏快速切换用） ──────────────────────────────────
-// 已移除内置预设，全部由用户自定义添加
 
 interface GeneratorProps {
   isActive: boolean;
@@ -50,7 +48,6 @@ const Generator: React.FC<GeneratorProps> = ({
   const [imageQuality, setImageQuality] = React.useState<GptImageQualityType>('auto');
   const [isGenerating, setIsGenerating] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<string | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
   const [showAddModel, setShowAddModel] = React.useState(false);
   const [editingModelId, setEditingModelId] = React.useState<string | null>(null);
   const [newModel, setNewModel] = React.useState<{ name: string; modelName: string; endpointUrl: string; apiKey: string; apiProvider: ApiProviderType }>({
@@ -58,16 +55,15 @@ const Generator: React.FC<GeneratorProps> = ({
     modelName: '',
     endpointUrl: '',
     apiKey: '',
-    apiProvider: 'laozhang'
+    apiProvider: 'standard-openai-gpt-image'
   });
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  // 虽然不暴露 provider 切换开关，但直接把这两组模型做合并全量展示
-  // 已移除内置预设，由用户自定义模型
-  const modelPresets: any[] = [];
-
-  // 当前模型是否不在预设列表里
-  const currentModelInPresets = modelPresets.some(m => m.id === settings.apiConfig.modelName);
+  const imageModelMap = new Map((settings.customModels || []).map(m => [m.id, m]));
+  const defaultImageModelRows = DEFAULT_FIXED_CUSTOM_MODELS.map(d => imageModelMap.get(d.id)).filter(
+    (m): m is CustomModelConfig => m != null,
+  );
+  const otherImageModels = (settings.customModels || []).filter(m => !isDefaultFixedImagePreset(m.id));
 
   const readImageDimensions = (src: string): Promise<{ width: number; height: number }> => {
     return new Promise((resolve, reject) => {
@@ -131,48 +127,6 @@ const Generator: React.FC<GeneratorProps> = ({
   const removePrompt = (idx: number) => setPrompts(prev => prev.filter((_, i) => i !== idx));
   const updatePrompt = (idx: number, val: string) => setPrompts(prev => prev.map((p, i) => i === idx ? val : p));
 
-  const setModel = (modelId: string) => {
-    const preset = modelPresets.find(m => m.id === modelId);
-    setSettings(prev => {
-      let newEndpointUrl = prev.savedUrls?.[modelId] ?? (preset?.url ?? prev.apiConfig.endpointUrl);
-      const newApiKey = prev.savedApiKeys?.[modelId] ?? '';
-
-      return {
-        ...prev,
-        apiConfig: {
-          ...prev.apiConfig,
-          modelName: preset ? preset.modelName : modelId,
-          presetId: modelId,
-          endpointUrl: newEndpointUrl,
-          apiKey: newApiKey
-        }
-      };
-    });
-  };
-
-const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
-    setSettings(prev => {
-      const nextApiConfig = { ...prev.apiConfig, [key]: val };
-      let nextSavedApiKeys = prev.savedApiKeys || {};
-      let nextSavedUrls = prev.savedUrls || {};
-
-      const memoryKey = prev.apiConfig.presetId || prev.apiConfig.modelName;
-
-      if (key === 'apiKey') {
-        nextSavedApiKeys = { ...nextSavedApiKeys, [memoryKey]: val };
-      } else if (key === 'endpointUrl') {
-        nextSavedUrls = { ...nextSavedUrls, [memoryKey]: val };
-      }
-
-      return {
-        ...prev,
-        apiConfig: nextApiConfig,
-        savedApiKeys: nextSavedApiKeys,
-        savedUrls: nextSavedUrls
-      };
-    });
-  };
-
   // 保存自定义模型
   const handleSaveCustomModel = () => {
     if (!newModel.name || !newModel.modelName || !newModel.endpointUrl) {
@@ -200,10 +154,11 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
         apiConfig: isSelected
           ? {
               ...prev.apiConfig,
+              presetId: modelId,
               modelName: customModel.modelName,
               endpointUrl: customModel.endpointUrl,
-              apiKey: customModel.apiKey,
-              apiProvider: customModel.apiProvider,
+              apiKey: customModel.apiKey || prev.savedApiKeys?.[modelId] || '',
+              apiProvider: customModel.apiProvider || prev.apiConfig.apiProvider,
             }
           : prev.apiConfig,
         savedUrls: { ...prev.savedUrls, [modelId]: newModel.endpointUrl },
@@ -211,7 +166,7 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
       };
     });
     addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: editingModelId ? `自定义模型「${newModel.name}」已更新` : `自定义模型「${newModel.name}」已保存` });
-    setNewModel({ name: '', modelName: '', endpointUrl: '', apiKey: '', apiProvider: 'laozhang' });
+    setNewModel({ name: '', modelName: '', endpointUrl: '', apiKey: '', apiProvider: 'standard-openai-gpt-image' });
     setEditingModelId(null);
     setShowAddModel(false);
   };
@@ -223,35 +178,15 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
       modelName: model.modelName,
       endpointUrl: model.endpointUrl,
       apiKey: model.apiKey || settings.savedApiKeys?.[model.id] || '',
-      apiProvider: model.apiProvider || 'laozhang',
+      apiProvider: model.apiProvider || 'standard-openai-gpt-image',
     });
     setShowAddModel(true);
   };
 
   const handleCancelEditCustomModel = () => {
     setEditingModelId(null);
-    setNewModel({ name: '', modelName: '', endpointUrl: '', apiKey: '', apiProvider: 'laozhang' });
+    setNewModel({ name: '', modelName: '', endpointUrl: '', apiKey: '', apiProvider: 'standard-openai-gpt-image' });
     setShowAddModel(false);
-  };
-
-  const fillGrsaiGptImageModel = () => {
-    setNewModel(prev => ({
-      ...prev,
-      name: prev.name || 'GrsAi GPT Image 1.5',
-      modelName: 'gpt-image-1.5',
-      endpointUrl: GRSAI_DEFAULT_ENDPOINT,
-      apiProvider: 'grsai-gpt-image'
-    }));
-  };
-
-  const fillGrsaiGptImage2VipModel = () => {
-    setNewModel(prev => ({
-      ...prev,
-      name: prev.name || 'GrsAi GPT Image 2 VIP (￥0.045/张)',
-      modelName: GRSAI_GPT_IMAGE2_VIP_MODEL,
-      endpointUrl: GRSAI_DEFAULT_ENDPOINT,
-      apiProvider: 'grsai-gpt-image'
-    }));
   };
 
   // 删除自定义模型
@@ -281,9 +216,16 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
 
   const handleGenerate= async () => {
     const combinedPrompt = prompts.map(p => p.trim()).filter(Boolean).join(' ');
-    if (!combinedPrompt) { setError('请输入提示词'); return; }
+    if (!combinedPrompt) {
+      addLog({
+        id: Date.now().toString(),
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'ERROR',
+        message: '请输入提示词',
+      });
+      return;
+    }
     setIsGenerating(true);
-    setError(null);
     const config: ProtocolConfig = { aspectRatio, imageSize, imageQuality, customPrompt: combinedPrompt };
     const startTime = Date.now();
     addLog({ id: `start-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `开始生图 [${settings.apiConfig.modelName || '默认模型'}]，比例 ${aspectRatio}，分辨率 ${imageSize}，质量 ${imageQuality}...` });
@@ -320,7 +262,6 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
       addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'SUCCESS', message: `生成成功，耗时 ${duration}s` });
     } catch (err) {
       const msg = getErrorMessage(err);
-      setError(msg);
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `生图失败 (耗时 ${duration}s): ${msg}` });
     } finally {
@@ -402,26 +343,13 @@ return (
         onChange={e => setNewModel(prev => ({ ...prev, apiProvider: e.target.value as ApiProviderType }))}
         className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1 text-[10px] text-gray-300 outline-none font-mono focus:border-indigo-500"
       >
-        <option value="laozhang">接口格式: OpenAI 兼容 Chat</option>
-        <option value="grsai-gpt-image">接口格式: GrsAi GPT Image</option>
-        <option value="grsai-nano-banana">接口格式: GrsAi Nano Banana</option>
-        <option value="openai-image">接口格式: OpenAI Images</option>
+        <option value="standard-openai-gpt-image">标准 GPT Image（OpenAI Images）</option>
+        <option value="standard-openai-nano-banana">标准 Nano Banana（OpenAI Images）</option>
+        <option value="openai-image">OpenAI Images（兼容 · 按模型自动）</option>
+        <option value="grsai-gpt-image">Grsai GPT Image（异步 Draw）</option>
+        <option value="grsai-nano-banana">Grsai Nano Banana（异步 Draw）</option>
+        <option value="laozhang">OpenAI 兼容 Chat（出图）</option>
       </select>
-      <div className="flex flex-col gap-1">
-        <button
-          onClick={fillGrsaiGptImageModel}
-          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-400 rounded text-[10px] font-bold transition-colors"
-        >
-          <Zap size={10} /> 填入 GrsAi GPT Image
-        </button>
-        <button
-          onClick={fillGrsaiGptImage2VipModel}
-          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-amber-600/15 hover:bg-amber-600/25 text-amber-400 rounded text-[10px] font-bold transition-colors"
-          title="公告模型 gpt-image-2-vip，￥0.045/张，1K/2K/4K + 质量 auto/low/medium/high"
-        >
-          <Zap size={10} /> 填入 GPT Image 2 VIP
-        </button>
-      </div>
       <button
         onClick={handleSaveCustomModel}
         className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 rounded text-[10px] font-bold transition-colors"
@@ -440,16 +368,64 @@ return (
   )}
 
   {/* 模型列表 */}
-  <div className="flex-1 overflow-y-auto custom-scrollbar py-1.5 px-2 space-y-1">
-
-    {/* 自定义模型列表 */}
-    {settings.customModels && settings.customModels.length > 0 && (
+  <div className="flex-1 overflow-y-auto custom-scrollbar py-1.5 px-2 space-y-2">
+    {defaultImageModelRows.length > 0 && (
       <div className="space-y-0.5">
-        {settings.customModels.map(m => {
+        <div className="px-1 pb-1 flex items-center gap-2 border-b border-gray-800/60">
+          <span className="text-[9px] font-bold uppercase font-mono text-gray-500 tracking-wider">默认</span>
+        </div>
+        {defaultImageModelRows.map(m => {
           const isSelected = settings.apiConfig.presetId === m.id;
           return (
             <div key={m.id} className="group flex items-center">
               <button
+                type="button"
+                onClick={() => setCustomModel(m)}
+                title={`${m.name}\n${m.endpointUrl}\n${m.apiProvider || 'auto'}`}
+                className={`flex flex-1 min-w-0 items-center gap-1.5 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
+                  isSelected
+                    ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/20'
+                    : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60 border border-transparent'
+                }`}
+              >
+                <span className="truncate">{m.name}</span>
+                <span className="shrink-0 px-1 py-px rounded-[3px] text-[8px] font-bold uppercase tracking-wide bg-slate-700/70 text-slate-400 border border-slate-600/40">
+                  默认
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleEditCustomModel(m)}
+                className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-indigo-400 transition-all"
+                title="编辑"
+              >
+                <Pencil size={10} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteCustomModel(m.id)}
+                className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all"
+                title="删除"
+              >
+                <Trash2 size={10} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    )}
+
+    {otherImageModels.length > 0 && (
+      <div className="space-y-0.5">
+        <div className="px-1 pb-1 flex items-center gap-2 border-b border-gray-800/60">
+          <span className="text-[9px] font-bold uppercase font-mono text-gray-600 tracking-wider">其它</span>
+        </div>
+        {otherImageModels.map(m => {
+          const isSelected = settings.apiConfig.presetId === m.id;
+          return (
+            <div key={m.id} className="group flex items-center">
+              <button
+                type="button"
                 onClick={() => setCustomModel(m)}
                 title={`${m.name}\n${m.endpointUrl}\n${m.apiProvider || 'auto'}`}
                 className={`flex-1 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
@@ -461,6 +437,7 @@ return (
                 {m.name}
               </button>
               <button
+                type="button"
                 onClick={() => handleEditCustomModel(m)}
                 className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-indigo-400 transition-all"
                 title="编辑"
@@ -468,6 +445,7 @@ return (
                 <Pencil size={10} />
               </button>
               <button
+                type="button"
                 onClick={() => handleDeleteCustomModel(m.id)}
                 className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all"
                 title="删除"
@@ -625,13 +603,6 @@ return (
         )}
       </button>
     </div>
-
-{/* 错误提示 */}
-    {error && (
-      <div className="px-3 pb-2">
-        <span className="text-[10px] text-red-400 font-mono">{error}</span>
-      </div>
-    )}
   </div>
 
   </aside>

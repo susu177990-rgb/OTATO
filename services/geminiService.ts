@@ -46,10 +46,33 @@ const base64ToBlob = (dataUrl: string): Blob => {
   return new Blob([array], { type: mimeType });
 };
 
-/** OpenAI GPT Image：内容审核严格程度，中转站若支持会透传 */
-const GPT_IMAGE_MODERATION: 'low' | 'auto' = 'low';
+/** GPT Image：`moderation` 固定为 `"low"`（OpenAI 文档 optional `"low"` | `"auto"`） */
+const GPT_IMAGE_MODERATION = 'low' as const;
 
 const isGptImageModel = (modelName: string): boolean => /^gpt-image-/i.test(modelName);
+
+/**
+ * BLTCY 等中转：nano-banana / Gemini 图模文档要求 body / FormData 里带 image_size = 1K|2K|4K；
+ * 若只传 OpenAI 标准的 size(W×H)，网关可能忽略并始终按 1K 出图。
+ */
+const prefersProxyImageSizeTier = (modelName: string): boolean => {
+  const m = modelName.toLowerCase();
+  return /nano-banana/.test(m) || (/gemini/.test(m) && /image/.test(m));
+};
+
+/**
+ * OpenAI `/v1/images/generations`（及 edits）：两套「标准」与兼容自动识别。
+ * - GPT Image：`size`(W×H) + `gpt-image-*` 时附带 quality/output_format/moderation；不传 image_size。
+ * - Nano Banana 中转惯例：`size` + 必选 `image_size` = 1K|2K|4K。
+ */
+function resolveOpenAiImagesParamKind(
+  provider: ApiConfig['apiProvider'],
+  modelName: string,
+): 'nano-banana' | 'gpt-image' {
+  if (provider === 'standard-openai-nano-banana') return 'nano-banana';
+  if (provider === 'standard-openai-gpt-image') return 'gpt-image';
+  return prefersProxyImageSizeTier(modelName) ? 'nano-banana' : 'gpt-image';
+}
 
 /** gpt-image-2、gpt-image-2-vip：与 OpenAI 文档相同的自定义 size 约束 */
 const usesGptImage2StyleResolution = (modelName: string): boolean =>
@@ -61,95 +84,145 @@ const getOpenAIImageQuality = (imageSize: ProtocolConfig['imageSize']): 'low' | 
 const resolveGptImageQuality = (config: ProtocolConfig): GptImageQualityType =>
   config.imageQuality ?? getOpenAIImageQuality(config.imageSize);
 
-const roundToMultipleOf16 = (value: number): number => Math.max(16, Math.round(value / 16) * 16);
-
-const GPT_IMAGE_SIZE_BY_RATIO: Record<Exclude<AspectRatioType, 'auto'>, Record<ProtocolConfig['imageSize'], string>> = {
-  '1:1': { '1K': '1024x1024', '2K': '2048x2048', '4K': '2880x2880' },
-  '2:3': { '1K': '1024x1536', '2K': '1360x2048', '4K': '2352x3520' },
-  '3:2': { '1K': '1536x1024', '2K': '2048x1360', '4K': '3520x2352' },
-  '3:4': { '1K': '1152x1536', '2K': '1536x2048', '4K': '2480x3312' },
-  '4:3': { '1K': '1536x1152', '2K': '2048x1536', '4K': '3312x2480' },
-  '9:16': { '1K': '864x1536', '2K': '1152x2048', '4K': '2160x3840' },
-  '16:9': { '1K': '1536x864', '2K': '2048x1152', '4K': '3840x2160' },
-  '21:9': { '1K': '1536x656', '2K': '2048x880', '4K': '3840x1648' },
+/**
+ * 标准输出分辨率（1K/HD、2K/FHD、4K/UHD）：比例与像素为用户给定表；
+ * 3:2、2:3 按同档位长边惯例补齐（与 16:9、9:16 同一套推导方式）。
+ */
+const STANDARD_IMAGE_SIZE_BY_RATIO: Record<
+  Exclude<AspectRatioType, 'auto'>,
+  Record<ProtocolConfig['imageSize'], string>
+> = {
+  '1:1': { '1K': '1280x1280', '2K': '1920x1920', '4K': '3840x3840' },
+  '3:4': { '1K': '960x1280', '2K': '1440x1920', '4K': '2880x3840' },
+  '4:3': { '1K': '1280x960', '2K': '1920x1440', '4K': '3840x2880' },
+  '9:16': { '1K': '720x1280', '2K': '1080x1920', '4K': '2160x3840' },
+  '16:9': { '1K': '1280x720', '2K': '1920x1080', '4K': '3840x2160' },
+  '21:9': { '1K': '1280x549', '2K': '1920x823', '4K': '3840x1646' },
+  '3:2': { '1K': '1280x853', '2K': '1920x1280', '4K': '3840x2560' },
+  '2:3': { '1K': '853x1280', '2K': '1280x1920', '4K': '2560x3840' },
 };
 
-const parseAspectRatio = (ratio: AspectRatioType): number | undefined => {
-  if (ratio === 'auto') return undefined;
-  const match = ratio.match(/^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/);
-  if (!match) return undefined;
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined;
-  return width / height;
+const getGptImageSize = (ratio: Exclude<AspectRatioType, 'auto'>, imageSize: ProtocolConfig['imageSize']): string => {
+  const row = STANDARD_IMAGE_SIZE_BY_RATIO[ratio];
+  if (!row) throw new Error(`不支持的比例：${ratio}`);
+  const wxh = row[imageSize];
+  if (!wxh) throw new Error(`不支持的分辨档位：${imageSize}`);
+  return wxh;
 };
 
-const getGptImageSize = (ratio: AspectRatioType, imageSize: ProtocolConfig['imageSize']): string => {
-  const normalizedRatio = ratio === 'auto' ? '1:1' : ratio;
-  const configuredSize = GPT_IMAGE_SIZE_BY_RATIO[normalizedRatio]?.[imageSize];
-  if (configuredSize) return configuredSize;
+/** OpenAI gpt-image-2：单边 ≤3840、总像素 ≤8294400、两边为 16px 整数倍（文档 Size constraints） */
+const GPT_IMAGE_2_MAX_EDGE = 3840;
+const GPT_IMAGE_2_MAX_PIXELS = 8_294_400;
 
-  const aspectRatio = parseAspectRatio(normalizedRatio) || 1;
-  const longToShortRatio = Math.max(aspectRatio, 1 / aspectRatio);
-  if (longToShortRatio > 3) {
-    throw new Error(`gpt-image-2 不支持超过 3:1 的极端比例：${ratio}`);
-  }
+const floorToMultipleOf16 = (n: number): number => Math.max(16, Math.floor(n / 16) * 16);
 
-  const longEdgeBySize = imageSize === '4K' ? 3840 : imageSize === '2K' ? 2048 : normalizedRatio === '1:1' ? 1024 : 1536;
-  let width: number;
-  let height: number;
+/**
+ * 将「理想 WxH」压到 gpt-image-2 合法范围：按比例缩放并向下对齐到 16，避免 UI 表 4K 超标或非整倍短边导致请求失败。
+ */
+function clampWxHForGptImage2(wxh: string): string {
+  const parts = wxh.split('x').map(s => Number(String(s).trim()));
+  let w = parts[0];
+  let h = parts[1];
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return wxh;
 
-  if (aspectRatio >= 1) {
-    width = longEdgeBySize;
-    height = roundToMultipleOf16(longEdgeBySize / aspectRatio);
+  const maxE0 = Math.max(w, h);
+  let s = 1;
+  if (maxE0 > GPT_IMAGE_2_MAX_EDGE) s = Math.min(s, GPT_IMAGE_2_MAX_EDGE / maxE0);
+  const px0 = w * h;
+  if (px0 > GPT_IMAGE_2_MAX_PIXELS) s = Math.min(s, Math.sqrt(GPT_IMAGE_2_MAX_PIXELS / px0));
+
+  if (s < 1 - 1e-12) {
+    w = floorToMultipleOf16(w * s);
+    h = floorToMultipleOf16(h * s);
   } else {
-    width = roundToMultipleOf16(longEdgeBySize * aspectRatio);
-    height = longEdgeBySize;
+    w = floorToMultipleOf16(w);
+    h = floorToMultipleOf16(h);
   }
 
-  const maxPixels = imageSize === '4K' ? 8294400 : imageSize === '2K' ? 4194304 : 2359296;
-  while (width * height > maxPixels) {
-    width = Math.max(16, Math.floor(width * 0.98 / 16) * 16);
-    height = Math.max(16, Math.floor(height * 0.98 / 16) * 16);
+  for (let guard = 0; guard < 32; guard++) {
+    const maxE = Math.max(w, h);
+    const px = w * h;
+    if (maxE <= GPT_IMAGE_2_MAX_EDGE && px <= GPT_IMAGE_2_MAX_PIXELS) break;
+    const shrink = Math.min(GPT_IMAGE_2_MAX_EDGE / maxE, Math.sqrt(GPT_IMAGE_2_MAX_PIXELS / Math.max(px, 1)), 0.999);
+    w = floorToMultipleOf16(w * shrink);
+    h = floorToMultipleOf16(h * shrink);
   }
 
-  return `${width}x${height}`;
-};
+  return `${w}x${h}`;
+}
+
+const resolveGptImage2WxH = (ratio: Exclude<AspectRatioType, 'auto'>, imageSize: ProtocolConfig['imageSize']): string =>
+  clampWxHForGptImage2(getGptImageSize(ratio, imageSize));
 
 /**
  * Grsai GPT Image 文档：aspectRatio 可为比例字符串或像素 "WxH"（gpt-image-2 / vip 用本应用计算的像素）。
  * 非 gpt-image-2 系模型仅传比例/auto，由服务端解析。
  */
 const getGrsaiGptImageAspectRatioParam = (modelName: string, config: ProtocolConfig): string => {
+  if (config.aspectRatio === 'auto') return 'auto';
   if (usesGptImage2StyleResolution(modelName)) {
-    return getGptImageSize(config.aspectRatio, config.imageSize);
+    return resolveGptImage2WxH(config.aspectRatio, config.imageSize);
   }
   if (isGptImageModel(modelName)) {
     return getOpenAIImageSize(config.aspectRatio, config.imageSize, modelName);
   }
-  return config.aspectRatio === 'auto' ? 'auto' : config.aspectRatio;
+  return config.aspectRatio;
 };
 
+/**
+ * OpenAI Images / 兼容中转（BLTCY nano-banana、gemini 图模等）：须把 UI 的 1K/2K/4K 映射到合法 WxH。
+ * 此前非 gpt-image-2 模型固定返回 ~1024 档位，导致选 4K 仍出 1K。
+ */
 const getOpenAIImageSize = (ratio: AspectRatioType, imageSize: ProtocolConfig['imageSize'], modelName: string): string => {
-  const normalizedRatio = ratio === 'auto' ? '1:1' : ratio;
-  if (!usesGptImage2StyleResolution(modelName)) {
-    if (normalizedRatio === '16:9' || normalizedRatio === '4:3' || normalizedRatio === '3:2' || normalizedRatio === '21:9') return '1536x1024';
-    if (normalizedRatio === '9:16' || normalizedRatio === '3:4' || normalizedRatio === '2:3') return '1024x1536';
+  /** UI 选「自适应」：不传固定 WxH，由模型根据 prompt 决定（gpt-image / nano-banana 等常见支持 size=auto） */
+  if (ratio === 'auto') {
+    if (usesGptImage2StyleResolution(modelName) || isGptImageModel(modelName) || prefersProxyImageSizeTier(modelName)) {
+      return 'auto';
+    }
+    if (/dall-e-3/i.test(modelName)) return '1792x1024';
+    if (/dall-e-2/i.test(modelName)) return '1024x1024';
+    return 'auto';
+  }
+
+  if (usesGptImage2StyleResolution(modelName)) {
+    return resolveGptImage2WxH(ratio, imageSize);
+  }
+
+  // DALL·E 3：官方仅三种尺寸，不按 2K/4K 分档
+  if (/dall-e-3/i.test(modelName)) {
+    if (ratio === '16:9' || ratio === '4:3' || ratio === '3:2' || ratio === '21:9') return '1792x1024';
+    if (ratio === '9:16' || ratio === '3:4' || ratio === '2:3') return '1024x1792';
     return '1024x1024';
   }
 
-  return getGptImageSize(normalizedRatio, imageSize);
+  // DALL·E 2：仅正方形 ≤1024
+  if (/dall-e-2/i.test(modelName)) {
+    return '1024x1024';
+  }
+
+  // nano-banana、gemini-*-image*、及其它 Images 兼容接口：与 gpt-image-2 相同档位表
+  return getGptImageSize(ratio, imageSize);
 };
 
 const inferProvider = (apiConfig: ApiConfig): ApiConfig['apiProvider'] => {
   const endpointUrl = apiConfig.endpointUrl || '';
   const modelName = apiConfig.modelName || '';
-  if (apiConfig.apiProvider === 'grsai-gpt-image' || apiConfig.apiProvider === 'grsai-nano-banana' || apiConfig.apiProvider === 'openai-image') {
+  if (
+    apiConfig.apiProvider === 'grsai-gpt-image' ||
+    apiConfig.apiProvider === 'grsai-nano-banana' ||
+    apiConfig.apiProvider === 'openai-image' ||
+    apiConfig.apiProvider === 'standard-openai-gpt-image' ||
+    apiConfig.apiProvider === 'standard-openai-nano-banana'
+  ) {
     return apiConfig.apiProvider;
   }
   if (endpointUrl.includes('/chat/completions')) return apiConfig.apiProvider || 'laozhang';
-  if (endpointUrl.includes('/draw/completions') || (endpointUrl.includes('grsai') && isGptImageModel(modelName))) return 'grsai-gpt-image';
+  // Grsai：nano 专用路径优先；/draw/completions 需按模型区分，避免 nano 误走 GPT 载荷丢失 imageSize
   if (endpointUrl.includes('/draw/nano-banana')) return 'grsai-nano-banana';
+  if (endpointUrl.includes('/draw/completions')) {
+    return isGptImageModel(modelName) ? 'grsai-gpt-image' : 'grsai-nano-banana';
+  }
+  if (endpointUrl.includes('grsai') && isGptImageModel(modelName)) return 'grsai-gpt-image';
   if (endpointUrl.includes('/images/') || modelName.includes('dall-e')) return 'openai-image';
   if (apiConfig.apiProvider === 'grsai' || endpointUrl.includes('grsai') || endpointUrl.includes('dakka')) return 'grsai-nano-banana';
   return apiConfig.apiProvider || 'laozhang';
@@ -174,9 +247,12 @@ export const generateImage = async (
     return generateViaGrsaiDraw(apiKey, endpointUrl, modelName, prompt, config, refs, provider);
   }
   
-  // 如果端点明确指向了 /images/... 或者是 dall-e 系列，则走原生图像生成（带多模态表单上传）通道
-  if (provider === 'openai-image') {
-    return generateViaOpenAIImages(apiKey, endpointUrl, modelName, prompt, config, refs);
+  if (
+    provider === 'openai-image' ||
+    provider === 'standard-openai-gpt-image' ||
+    provider === 'standard-openai-nano-banana'
+  ) {
+    return generateViaOpenAIImages(apiKey, endpointUrl, modelName, prompt, config, refs, provider);
   }
 
   return generateViaOpenAICompatible(apiKey, endpointUrl, modelName, prompt, config, refs);
@@ -213,8 +289,11 @@ async function generateViaOpenAICompatible(
     messages: [{ role: 'user', content: userContent }]
   };
 
-  // 仅在明确是 Google 系模型时，挂靠特有安全与生成配置
-  if (modelName.toLowerCase().includes('gemini')) {
+  // Gemini 图模 / nano-banana：挂 generationConfig.imageConfig（含 imageSize 档位）
+  const usesGoogleStyleImageConfig =
+    modelName.toLowerCase().includes('gemini') || /^nano-banana/i.test(modelName.trim());
+
+  if (usesGoogleStyleImageConfig) {
     payload.safetySettings = SAFETY_SETTINGS;
     payload.generationConfig = { imageConfig };
   }
@@ -293,10 +372,17 @@ async function generateViaOpenAICompatible(
 // endpointUrl 直接填写完整地址，如 https://api.xxx.com/v1/images/generations
 // ────────────────────────────────────────────────────────────────
 async function generateViaOpenAIImages(
-  apiKey: string, endpointUrl: string, modelName: string, prompt: string, config: ProtocolConfig, refImages: string[] = []
+  apiKey: string,
+  endpointUrl: string,
+  modelName: string,
+  prompt: string,
+  config: ProtocolConfig,
+  refImages: string[] = [],
+  imagesProvider?: ApiConfig['apiProvider'],
 ): Promise<string> {
   const size = getOpenAIImageSize(config.aspectRatio, config.imageSize, modelName);
   const quality = resolveGptImageQuality(config);
+  const imagesKind = resolveOpenAiImagesParamKind(imagesProvider, modelName);
 
   if (refImages.length === 0) {
     const payload: Record<string, unknown> = {
@@ -305,7 +391,10 @@ async function generateViaOpenAIImages(
       n: 1,
       size,
     };
-    if (isGptImageModel(modelName)) {
+    if (imagesKind === 'nano-banana') {
+      payload.image_size = config.imageSize;
+    }
+    if (imagesKind === 'gpt-image' && isGptImageModel(modelName)) {
       payload.quality = quality;
       payload.output_format = 'png';
       payload.moderation = GPT_IMAGE_MODERATION;
@@ -338,7 +427,10 @@ async function generateViaOpenAIImages(
   formData.append('prompt', prompt);
   formData.append('size', size);
   formData.append('n', '1');
-  if (isGptImageModel(modelName)) {
+  if (imagesKind === 'nano-banana') {
+    formData.append('image_size', config.imageSize);
+  }
+  if (imagesKind === 'gpt-image' && isGptImageModel(modelName)) {
     formData.append('quality', quality);
     formData.append('output_format', 'png');
     formData.append('moderation', GPT_IMAGE_MODERATION);
@@ -369,9 +461,6 @@ async function generateViaOpenAIImages(
 }
 
 const POLL_INTERVAL_MS = 1500;
-
-const isGrsaiGptImageEndpoint = (endpointUrl: string, modelName: string): boolean =>
-  endpointUrl.includes('/draw/completions') || /^gpt-image-|^sora-image$/i.test(modelName);
 
 const parseGrsaiImageUrl = (data: any): string | undefined => {
   if (!data) return undefined;
@@ -428,7 +517,8 @@ async function generateViaGrsaiDraw(
     (r) => r && (r.startsWith('http') || r.startsWith('data:'))
   );
 
-  const useGptImagePayload = provider === 'grsai-gpt-image' || isGrsaiGptImageEndpoint(endpointUrl, modelName);
+  // 仅 GPT Image 走 aspectRatio+quality；nano-banana 等须带 imageSize（不能用 URL 猜载荷）
+  const useGptImagePayload = provider === 'grsai-gpt-image';
   const body: Record<string, unknown> = useGptImagePayload
     ? {
         model: modelName,

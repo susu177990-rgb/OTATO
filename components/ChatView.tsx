@@ -10,8 +10,6 @@ import {
   Paperclip,
   RefreshCw,
   MessageSquare,
-  Package,
-  Bot,
 } from 'lucide-react';
 import {
   AppSettings,
@@ -25,13 +23,15 @@ import {
   SkillPackRecord,
 } from '../types';
 import { fileToBase64 } from '../services/geminiService';
-import { sendChatCompletion, CHAT_MAX_ATTACHMENT_BYTES } from '../services/chatCompletion';
+import { CHAT_MAX_ATTACHMENT_BYTES } from '../services/chatCompletion';
 import { loadChatState, schedulePersistChatState } from '../services/chatStorage';
 import { parseSkillZipFile, MAX_SKILL_ZIP_BYTES } from '../services/skillPack';
 import { loadSkillPacks, saveSkillPacks } from '../services/skillPackStorage';
 import { runAgentChatTurn } from '../services/chatAgent';
-import { applySlashBoosterFromMessages } from '../services/slashCommandBooster';
 import { getErrorMessage } from '../utils/errorUtils';
+import { DEFAULT_FIXED_CHAT_CUSTOM_MODELS, isDefaultFixedChatPreset } from '../constants';
+import { GitHubMarkdown } from './GitHubMarkdown';
+import { ChatSkillPackPanel } from './ChatSkillPackPanel';
 
 interface ChatViewProps {
   isActive: boolean;
@@ -140,14 +140,18 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
 
-  const [agentMode, setAgentMode] = useState(false);
   const [skillPacks, setSkillPacks] = useState<SkillPackRecord[]>([]);
 
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const skillZipInputRef = useRef<HTMLInputElement>(null);
 
   const chatCfg = settings.chatApiConfig;
+
+  const chatModelMap = new Map((settings.chatCustomModels || []).map(m => [m.id, m]));
+  const defaultChatModelRows = DEFAULT_FIXED_CHAT_CUSTOM_MODELS.map(d => chatModelMap.get(d.id)).filter(
+    (m): m is CustomModelConfig => m != null,
+  );
+  const otherChatModels = (settings.chatCustomModels || []).filter(m => !isDefaultFixedChatPreset(m.id));
 
   useEffect(() => {
     let cancelled = false;
@@ -301,13 +305,10 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
     return conv.enabledSkillPackIds.includes(packId);
   };
 
-  const handleSkillZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    e.target.value = '';
-    if (!f) return;
+  const ingestSkillZipFile = async (file: File) => {
     setComposerError(null);
     try {
-      const pack = await parseSkillZipFile(f);
+      const pack = await parseSkillZipFile(file);
       setSkillPacks(prev => {
         const next = [pack, ...prev];
         void saveSkillPacks(next);
@@ -377,7 +378,7 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
         const att: ChatAttachment = {
           kind: attachmentKindFromFile(file),
           mime: file.type || 'application/octet-stream',
-          name: file.name,
+          name: file.name?.trim() || `paste-${Date.now()}`,
           dataUrl,
         };
         setPendingAttachments(prev => [...prev, att]);
@@ -469,33 +470,18 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
     try {
       const skillBlocks = getSkillMarkdownBlocks(convForSkills, skillPacks);
 
-      if (agentMode) {
-        const newMsgs = await runAgentChatTurn({
-          chatApiConfig: chatCfg,
-          settings,
-          conversationMessages: messagesForApi,
-          skillMarkdownBlocks: skillBlocks,
-          conversationAttachments: mergedAttachments,
-        });
-        patchConversation(targetConvId, c => ({
-          ...c,
-          updatedAt: Date.now(),
-          messages: [...c.messages, ...newMsgs],
-        }));
-      } else {
-        const replyText = await sendChatCompletion(chatCfg, applySlashBoosterFromMessages(messagesForApi));
-        const assistantMessage: ChatMessage = {
-          id: `msg-${Date.now()}-a`,
-          role: 'assistant',
-          createdAt: Date.now(),
-          parts: [{ type: 'text', text: replyText }],
-        };
-        patchConversation(targetConvId, c => ({
-          ...c,
-          updatedAt: Date.now(),
-          messages: [...c.messages, assistantMessage],
-        }));
-      }
+      const newMsgs = await runAgentChatTurn({
+        chatApiConfig: chatCfg,
+        settings,
+        conversationMessages: messagesForApi,
+        skillMarkdownBlocks: skillBlocks,
+        conversationAttachments: mergedAttachments,
+      });
+      patchConversation(targetConvId, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: [...c.messages, ...newMsgs],
+      }));
     } catch (e) {
       const errText = getErrorMessage(e);
       setComposerError(errText);
@@ -520,6 +506,39 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
       e.preventDefault();
       if (!isSending) void handleSend();
     }
+  };
+
+  const handleComposerPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (isSending) return;
+    const dt = e.clipboardData;
+    if (!dt) return;
+
+    const files: File[] = [];
+    const seen = new Set<string>();
+    const pushFile = (f: File) => {
+      const key = `${f.name}\0${f.size}\0${f.lastModified}\0${f.type}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      files.push(f);
+    };
+
+    if (dt.items?.length) {
+      for (let i = 0; i < dt.items.length; i++) {
+        const item = dt.items[i];
+        if (item.kind === 'file') {
+          const f = item.getAsFile();
+          if (f) pushFile(f);
+        }
+      }
+    }
+    if (files.length === 0 && dt.files?.length) {
+      for (const f of Array.from(dt.files)) pushFile(f);
+    }
+
+    if (files.length === 0) return;
+
+    e.preventDefault();
+    void addAttachmentsFromFiles(files);
   };
 
   if (!isActive) return null;
@@ -600,125 +619,115 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto custom-scrollbar py-1.5 px-2 space-y-1">
+        <div className="flex-1 overflow-y-auto custom-scrollbar py-1.5 px-2 space-y-2">
           {(settings.chatCustomModels?.length ?? 0) === 0 && !showAddModel && (
             <p className="text-[10px] text-gray-600 px-1 py-2 leading-relaxed">
               点击 + 添加中转 Chat 模型（Endpoint 指向 chat/completions）。
             </p>
           )}
-          {(settings.chatCustomModels || []).map(m => {
-            const isSelected = chatCfg.presetId === m.id;
-            return (
-              <div key={m.id} className="group flex items-center">
-                <button
-                  type="button"
-                  onClick={() => setChatCustomModel(m)}
-                  title={`${m.name}\n${m.endpointUrl}`}
-                  className={`flex-1 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
-                    isSelected
-                      ? 'bg-cyan-600/20 text-cyan-300 border border-cyan-500/20'
-                      : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
-                  }`}
-                >
-                  {m.name}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleEditCustomModel(m)}
-                  className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-indigo-400 transition-all"
-                  title="编辑"
-                >
-                  <Pencil size={10} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDeleteCustomModel(m.id)}
-                  className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all"
-                  title="删除"
-                >
-                  <Trash2 size={10} />
-                </button>
+          {defaultChatModelRows.length > 0 && (
+            <div className="space-y-0.5">
+              <div className="px-1 pb-1 flex items-center gap-2 border-b border-gray-800/60">
+                <span className="text-[9px] font-bold uppercase font-mono text-gray-500 tracking-wider">默认</span>
               </div>
-            );
-          })}
+              {defaultChatModelRows.map(m => {
+                const isSelected = chatCfg.presetId === m.id;
+                return (
+                  <div key={m.id} className="group flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => setChatCustomModel(m)}
+                      title={`${m.name}\n${m.endpointUrl}`}
+                      className={`flex flex-1 min-w-0 items-center gap-1.5 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
+                        isSelected
+                          ? 'bg-cyan-600/20 text-cyan-300 border border-cyan-500/20'
+                          : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60 border border-transparent'
+                      }`}
+                    >
+                      <span className="truncate">{m.name}</span>
+                      <span className="shrink-0 px-1 py-px rounded-[3px] text-[8px] font-bold uppercase tracking-wide bg-slate-700/70 text-slate-400 border border-slate-600/40">
+                        默认
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEditCustomModel(m)}
+                      className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-indigo-400 transition-all"
+                      title="编辑"
+                    >
+                      <Pencil size={10} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCustomModel(m.id)}
+                      className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all"
+                      title="删除"
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {otherChatModels.length > 0 && (
+            <div className="space-y-0.5">
+              <div className="px-1 pb-1 flex items-center gap-2 border-b border-gray-800/60">
+                <span className="text-[9px] font-bold uppercase font-mono text-gray-600 tracking-wider">其它</span>
+              </div>
+              {otherChatModels.map(m => {
+                const isSelected = chatCfg.presetId === m.id;
+                return (
+                  <div key={m.id} className="group flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => setChatCustomModel(m)}
+                      title={`${m.name}\n${m.endpointUrl}`}
+                      className={`flex-1 text-left px-2.5 py-1.5 rounded-md text-[11px] font-mono transition-colors truncate ${
+                        isSelected
+                          ? 'bg-cyan-600/20 text-cyan-300 border border-cyan-500/20'
+                          : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/60'
+                      }`}
+                    >
+                      {m.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEditCustomModel(m)}
+                      className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-indigo-400 transition-all"
+                      title="编辑"
+                    >
+                      <Pencil size={10} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCustomModel(m.id)}
+                      className="p-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all"
+                      title="删除"
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        <div className="flex-shrink-0 border-t border-gray-800/60 px-2 py-2 space-y-2 bg-black/25">
-          <label className="flex items-center gap-2 cursor-pointer text-[10px] text-gray-400 font-mono">
-            <input
-              type="checkbox"
-              checked={agentMode}
-              onChange={e => setAgentMode(e.target.checked)}
-              className="rounded border-gray-600"
-            />
-            <Bot size={12} className="text-amber-500/90 shrink-0" />
-            Agent
-          </label>
-          <p className="text-[9px] text-gray-600 leading-snug">
-            依赖 Chat Completions tools。底部可为 Agent 指定「生图 / 视频路线」（来自已保存模型）；保持「跟随当前页」则沿用生图页、视频页的当前选中接口。
-          </p>
-          <div className="flex items-center gap-1.5">
-            <Package size={11} className="text-gray-600 shrink-0" />
-            <span className="text-[10px] font-bold text-gray-500 uppercase font-mono tracking-tight">
-              Skill ZIP
-            </span>
-            <button
-              type="button"
-              onClick={() => skillZipInputRef.current?.click()}
-              className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 hover:text-white font-mono"
-            >
-              导入
-            </button>
-            <input
-              ref={skillZipInputRef}
-              type="file"
-              accept=".zip,application/zip"
-              className="hidden"
-              onChange={handleSkillZipUpload}
-            />
-          </div>
-          <p className="text-[9px] text-gray-600">
-            内含 SKILL.md；≤{Math.round(MAX_SKILL_ZIP_BYTES / 1024 / 1024)}MB
-          </p>
-          <div className="max-h-24 overflow-y-auto space-y-1 custom-scrollbar">
-            {skillPacks.length === 0 ? (
-              <p className="text-[9px] text-gray-700 px-0.5">暂无 Skill 包</p>
-            ) : (
-              skillPacks.map(p => (
-                <div
-                  key={p.id}
-                  className="flex items-start gap-1 text-[10px] font-mono bg-gray-950/50 rounded px-1 py-0.5 border border-gray-800/60"
-                >
-                  <label className="flex items-start gap-1 flex-1 min-w-0 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={isSkillPackEnabledForConv(activeConversation, p.id)}
-                      disabled={!activeConversationId}
-                      onChange={e => toggleSkillPackForConversation(p.id, e.target.checked)}
-                      className="mt-0.5 rounded border-gray-600 shrink-0"
-                    />
-                    <span className="truncate text-gray-400" title={p.title}>
-                      {p.title}
-                    </span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => void handleDeleteSkillPack(p.id)}
-                    className="text-gray-600 hover:text-red-400 shrink-0 p-0.5"
-                    title="删除"
-                  >
-                    <Trash2 size={10} />
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+        <ChatSkillPackPanel
+          skillPacks={skillPacks}
+          activeConversationId={activeConversationId}
+          maxZipBytes={MAX_SKILL_ZIP_BYTES}
+          isPackEnabled={id => isSkillPackEnabledForConv(activeConversation, id)}
+          onTogglePack={toggleSkillPackForConversation}
+          onDeletePack={handleDeleteSkillPack}
+          onImportZip={f => void ingestSkillZipFile(f)}
+        />
 
         <div className="flex-shrink-0 border-t border-gray-800/60 px-3 py-2 space-y-2 bg-gray-950/50">
           <div>
             <label className="block text-[9px] text-gray-500 uppercase font-mono mb-1">
-              Agent · 生图路线
+              工具 · 生图路线
             </label>
             <select
               value={settings.agentImagePresetId ?? ''}
@@ -740,7 +749,7 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
           </div>
           <div>
             <label className="block text-[9px] text-gray-500 uppercase font-mono mb-1">
-              Agent · 视频路线
+              工具 · 视频路线
             </label>
             <select
               value={settings.agentVideoPresetId ?? ''}
@@ -776,7 +785,7 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
               <MessageSquare size={48} className="text-gray-800 mb-3" />
               <p className="text-[11px] text-gray-600 font-mono tracking-wider">START A CONVERSATION</p>
               <p className="text-[10px] text-gray-700 mt-2 max-w-sm">
-                支持文字与附件。开启左侧 Agent 后可按 Skill 与生图/视频页已保存模型自动执行任务（需 API 支持 tools）。
+                支持文字与附件。对话默认启用 Agent（tools）。侧栏上方导入 Skill ZIP 并勾选本会话要注入的包；下方可选工具生图/视频路线。
               </p>
             </div>
           ) : (
@@ -830,11 +839,14 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
                     )}
                     {msg.parts.map((part, i) => {
                       if (part.type === 'text') {
-                        return (
-                          <p key={i} className="whitespace-pre-wrap break-words font-sans">
-                            {part.text}
-                          </p>
-                        );
+                        if (isUser) {
+                          return (
+                            <p key={i} className="whitespace-pre-wrap break-words font-sans">
+                              {part.text}
+                            </p>
+                          );
+                        }
+                        return <GitHubMarkdown key={i} markdown={part.text} />;
                       }
                       const { attachment: a } = part;
                       if (a.kind === 'image') {
@@ -917,7 +929,8 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
               value={inputText}
               onChange={e => setInputText(e.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder="输入消息…（Enter 发送，Shift+Enter 换行）"
+              onPaste={handleComposerPaste}
+              placeholder="输入消息…（Enter 发送，Shift+Enter 换行；可粘贴图片/文件为附件）"
               rows={2}
               disabled={isSending}
               className="flex-1 bg-black/40 border border-gray-700/80 rounded-lg px-3 py-2 text-[13px] text-gray-200 placeholder-gray-600 outline-none focus:border-indigo-500 resize-none min-h-[44px] max-h-32 custom-scrollbar"

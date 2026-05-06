@@ -6,12 +6,20 @@ import VideoGenerator from './components/VideoGenerator';
 import ChatView from './components/ChatView';
 import Gallery from './components/Gallery';
 import { GeneratedImage, LogEntry, AppSettings } from './types';
-import { DEFAULT_APP_SETTINGS } from './constants';
+import { DEFAULT_APP_SETTINGS, DEFAULT_FIXED_CHAT_CUSTOM_MODELS, DEFAULT_FIXED_CUSTOM_MODELS } from './constants';
 import { persistImage, loadAllImages, deletePersistedImage, clearPersistedImages } from './services/imageStorage';
 import { getErrorMessage } from './utils/errorUtils';
 
 function normalizeLoadedSettings(raw: Partial<AppSettings>): AppSettings {
-  const customModels = raw.customModels ?? DEFAULT_APP_SETTINGS.customModels ?? [];
+  const customModelsRaw =
+    raw.customModels !== undefined ? raw.customModels : (DEFAULT_APP_SETTINGS.customModels ?? []);
+  let customModels = [...customModelsRaw];
+  for (let i = DEFAULT_FIXED_CUSTOM_MODELS.length - 1; i >= 0; i--) {
+    const fixed = DEFAULT_FIXED_CUSTOM_MODELS[i];
+    if (!customModels.some(m => m.id === fixed.id)) {
+      customModels = [fixed, ...customModels];
+    }
+  }
   const videoCustomModels = raw.videoCustomModels ?? [];
   let agentImagePresetId = raw.agentImagePresetId;
   if (agentImagePresetId && !customModels.some(m => m.id === agentImagePresetId)) {
@@ -20,6 +28,16 @@ function normalizeLoadedSettings(raw: Partial<AppSettings>): AppSettings {
   let agentVideoPresetId = raw.agentVideoPresetId;
   if (agentVideoPresetId && !videoCustomModels.some(m => m.id === agentVideoPresetId)) {
     agentVideoPresetId = undefined;
+  }
+
+  const chatCustomModelsRaw =
+    raw.chatCustomModels !== undefined ? raw.chatCustomModels : (DEFAULT_APP_SETTINGS.chatCustomModels ?? []);
+  let chatCustomModels = [...chatCustomModelsRaw];
+  for (let i = DEFAULT_FIXED_CHAT_CUSTOM_MODELS.length - 1; i >= 0; i--) {
+    const fixed = DEFAULT_FIXED_CHAT_CUSTOM_MODELS[i];
+    if (!chatCustomModels.some(m => m.id === fixed.id)) {
+      chatCustomModels = [fixed, ...chatCustomModels];
+    }
   }
 
   return {
@@ -35,7 +53,7 @@ function normalizeLoadedSettings(raw: Partial<AppSettings>): AppSettings {
     chatSavedApiKeys: { ...DEFAULT_APP_SETTINGS.chatSavedApiKeys, ...(raw.chatSavedApiKeys || {}) },
     chatSavedUrls: { ...DEFAULT_APP_SETTINGS.chatSavedUrls, ...(raw.chatSavedUrls || {}) },
     customModels,
-    chatCustomModels: raw.chatCustomModels ?? DEFAULT_APP_SETTINGS.chatCustomModels,
+    chatCustomModels,
     videoCustomModels,
     agentImagePresetId,
     agentVideoPresetId,

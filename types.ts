@@ -28,7 +28,17 @@ export type VideoGenerationConfig = Omit<ProtocolConfig, 'imageSize'> & {
   enableUpsample?: boolean;
 };
 
-export type ApiProviderType = 'laozhang' | 'grsai' | 'grsai-gpt-image' | 'grsai-nano-banana' | 'openai-image';
+/** 生图「接口格式」：OpenAI Images 下两套标准约定 + Grsai 异步 + 兼容 Chat 出图 + 自动识别 */
+export type ApiProviderType =
+  | 'laozhang'
+  | 'grsai'
+  | 'grsai-gpt-image'
+  | 'grsai-nano-banana'
+  | 'openai-image'
+  /** `/v1/images/generations`：按 GPT Image（OpenAI）——仅 size(W×H)+gpt-image 时附带 quality 等，不传 image_size 档位 */
+  | 'standard-openai-gpt-image'
+  /** `/v1/images/generations`：按 Nano Banana 中转惯例——size(W×H) + 必选 body.image_size = 1K|2K|4K */
+  | 'standard-openai-nano-banana';
 
 export interface ApiConfig {
   /** 完整 API 请求地址，如 https://api.bltcy.ai/v1/chat/completions */
