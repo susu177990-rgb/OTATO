@@ -13,6 +13,21 @@ export interface ProtocolConfig {
   customPrompt?: string;
 }
 
+/** 视频生成参数（与 videoService.generateVideo 对齐） */
+export type VideoGenerationConfig = Omit<ProtocolConfig, 'imageSize'> & {
+  duration?: number;
+  motionImageUrl?: string;
+  motionVideoUrl?: string;
+  motionVideoName?: string;
+  motionMode?: string;
+  characterOrientation?: 'image' | 'video';
+  keepOriginalSound?: boolean;
+  videoMode?: VideoModeType;
+  videoResolution?: VideoResolutionType;
+  enhancePrompt?: boolean;
+  enableUpsample?: boolean;
+};
+
 export type ApiProviderType = 'laozhang' | 'grsai' | 'grsai-gpt-image' | 'grsai-nano-banana' | 'openai-image';
 
 export interface ApiConfig {
@@ -38,10 +53,87 @@ export interface CustomModelConfig {
 export interface AppSettings {
   apiConfig: ApiConfig;
   videoApiConfig?: ApiConfig;
+  /** 对话页独立 endpoint / 模型 / Key（与生图互不覆盖） */
+  chatApiConfig: ApiConfig;
   savedApiKeys?: Record<string, string>;
   savedUrls?: Record<string, string>;
+  /** 对话自定义模型内存 Key（presetId → Key） */
+  chatSavedApiKeys?: Record<string, string>;
+  chatSavedUrls?: Record<string, string>;
   customModels?: CustomModelConfig[];
   videoCustomModels?: CustomModelConfig[];
+  chatCustomModels?: CustomModelConfig[];
+  /** 对话页 Agent「生图路线」所选已保存模型 id（存在时 generate_image 强制走该预设） */
+  agentImagePresetId?: string;
+  /** 对话页 Agent「视频路线」所选已保存模型 id（存在时 generate_video 强制走该预设） */
+  agentVideoPresetId?: string;
+}
+
+/** 对话附件（IndexedDB 持久化，体积需注意） */
+export type ChatAttachmentKind = 'image' | 'video' | 'file';
+
+export interface ChatAttachment {
+  kind: ChatAttachmentKind;
+  mime: string;
+  name: string;
+  dataUrl: string;
+  /** 会话级附件索引，用于 Agent 检索与 ref_image_urls 简写 */
+  registryId?: string;
+}
+
+export type ChatMessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'attachment'; attachment: ChatAttachment };
+
+/** OpenAI tool_calls 条目（持久化于助手消息） */
+export interface ChatToolCall {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  createdAt: number;
+  parts: ChatMessagePart[];
+  /** role === tool */
+  toolCallId?: string;
+  /** role === assistant，存在时表示模型发起了函数调用 */
+  toolCalls?: ChatToolCall[];
+}
+
+export interface SkillDocument {
+  name: string;
+  markdown: string;
+}
+
+export interface SkillPackRecord {
+  id: string;
+  title: string;
+  importedAt: number;
+  skills: SkillDocument[];
+}
+
+export interface ConversationAttachmentEntry {
+  id: string;
+  messageId: string;
+  name: string;
+  mime: string;
+  kind: ChatAttachmentKind;
+  createdAt: number;
+  dataUrl: string;
+}
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messages: ChatMessage[];
+  /** 本会话启用的 Skill 包 id；未设置表示全部启用 */
+  enabledSkillPackIds?: string[];
+  /** 本会话用户上传附件索引（供 Agent 工具解析）；dataUrl 持久化在 IndexedDB */
+  attachments?: ConversationAttachmentEntry[];
 }
 
 export interface LogEntry {

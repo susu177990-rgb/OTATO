@@ -1,0 +1,261 @@
+import type { ApiConfig, ChatAttachment, ChatMessage, ChatToolCall } from '../types';
+
+/** 单个附件估算上限（base64 解码后约等于字节数） */
+export const CHAT_MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
+
+function dataUrlByteLength(dataUrl: string): number {
+  const idx = dataUrl.indexOf(',');
+  if (idx === -1) return dataUrl.length;
+  const b64 = dataUrl.slice(idx + 1).replace(/\s/g, '');
+  const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((b64.length * 3) / 4) - pad);
+}
+
+function attachmentToApiParts(att: ChatAttachment): unknown[] {
+  if (att.kind === 'image' || att.mime.startsWith('image/')) {
+    return [{ type: 'image_url', image_url: { url: att.dataUrl } }];
+  }
+  if (att.kind === 'video' || att.mime.startsWith('video/')) {
+    return [{ type: 'video_url', video_url: { url: att.dataUrl } }];
+  }
+  return [
+    {
+      type: 'text',
+      text: `用户上传了文件「${att.name}」（MIME: ${att.mime}）。当前版本未将二进制发往模型，请结合文件名与上下文作答。`,
+    },
+  ];
+}
+
+function buildUserAssistantContent(msg: ChatMessage): string | unknown[] {
+  const content: unknown[] = [];
+  for (const part of msg.parts) {
+    if (part.type === 'text') {
+      if (part.text.trim()) content.push({ type: 'text', text: part.text });
+    } else {
+      const sz = dataUrlByteLength(part.attachment.dataUrl);
+      if (sz > CHAT_MAX_ATTACHMENT_BYTES) {
+        content.push({
+          type: 'text',
+          text: `[附件「${part.attachment.name}」超过 ${Math.round(CHAT_MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB，已跳过上传]`,
+        });
+        continue;
+      }
+      content.push(...attachmentToApiParts(part.attachment));
+    }
+  }
+
+  if (content.length === 0) content.push({ type: 'text', text: ' ' });
+
+  const onlyText =
+    content.length === 1 &&
+    typeof content[0] === 'object' &&
+    content[0] !== null &&
+    (content[0] as { type?: string }).type === 'text';
+
+  if (onlyText) {
+    return (content[0] as { text: string }).text;
+  }
+
+  return content;
+}
+
+/** 单条消息映射为 OpenAI Chat Completions message */
+export function messageToOpenAiMessage(msg: ChatMessage): Record<string, unknown> {
+  if (msg.role === 'system') {
+    const text = msg.parts
+      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+      .map(p => p.text)
+      .join('\n');
+    return { role: 'system', content: text || ' ' };
+  }
+
+  if (msg.role === 'tool') {
+    const text = msg.parts
+      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+      .map(p => p.text)
+      .join('\n');
+    return {
+      role: 'tool',
+      tool_call_id: msg.toolCallId || '',
+      content: text || '',
+    };
+  }
+
+  const payload = buildUserAssistantContent(msg);
+
+  if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
+    const out: Record<string, unknown> = {
+      role: 'assistant',
+      tool_calls: msg.toolCalls.map(tc => ({
+        id: tc.id,
+        type: 'function',
+        function: { name: tc.name, arguments: tc.arguments || '{}' },
+      })),
+    };
+
+    if (typeof payload === 'string') {
+      out.content = payload.trim() ? payload : null;
+    } else if (Array.isArray(payload)) {
+      const arr = payload as unknown[];
+      out.content = arr.length ? arr : null;
+    } else {
+      out.content = null;
+    }
+    return out;
+  }
+
+  return { role: msg.role, content: payload };
+}
+
+/** 发送前校验附件体积 */
+export function validateMessagesForSend(messages: ChatMessage[]): void {
+  if (!messages?.length) {
+    throw new Error('对话消息为空，无法请求 API（请确认至少有一条用户消息）');
+  }
+
+  for (const m of messages) {
+    if (m.role === 'tool' || m.role === 'system') continue;
+    for (const p of m.parts) {
+      if (p.type !== 'attachment') continue;
+      const sz = dataUrlByteLength(p.attachment.dataUrl);
+      if (sz > CHAT_MAX_ATTACHMENT_BYTES) {
+        throw new Error(
+          `附件「${p.attachment.name}」过大（>${Math.round(CHAT_MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB），请移除或压缩后再发送`,
+        );
+      }
+    }
+  }
+}
+
+function extractAssistantText(data: Record<string, unknown>): string {
+  const choices = data.choices as Array<{ message?: { content?: unknown } }> | undefined;
+  const choice = choices?.[0];
+  const contentParts = choice?.message?.content;
+
+  if (typeof contentParts === 'string') return contentParts;
+
+  if (Array.isArray(contentParts)) {
+    const texts: string[] = [];
+    for (const part of contentParts) {
+      if (part && typeof part === 'object') {
+        const o = part as { type?: string; text?: string };
+        if (o.type === 'text' && o.text) texts.push(o.text);
+      } else if (typeof part === 'string') texts.push(part);
+    }
+    if (texts.length) return texts.join('\n');
+    return JSON.stringify(contentParts);
+  }
+
+  return JSON.stringify(data);
+}
+
+export function parseAssistantChoice(data: Record<string, unknown>): {
+  contentText: string | null;
+  toolCalls: ChatToolCall[];
+} {
+  const choices = data.choices as Array<{ message?: Record<string, unknown> }> | undefined;
+  const message = choices?.[0]?.message;
+  if (!message) return { contentText: null, toolCalls: [] };
+
+  const rawCalls = message.tool_calls as
+    | Array<{
+        id?: string;
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>
+    | undefined;
+
+  const toolCalls: ChatToolCall[] = [];
+  if (Array.isArray(rawCalls)) {
+    for (const c of rawCalls) {
+      if (c?.type === 'function' && c.function?.name && c.id) {
+        const rawArgs = c.function.arguments;
+        toolCalls.push({
+          id: c.id,
+          name: c.function.name,
+          arguments:
+            typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs ?? {}, null, 0),
+        });
+      }
+    }
+  }
+
+  const content = message.content;
+  let contentText: string | null = null;
+  if (typeof content === 'string') {
+    contentText = content;
+  } else if (Array.isArray(content)) {
+    const texts: string[] = [];
+    for (const part of content) {
+      if (part && typeof part === 'object') {
+        const o = part as { type?: string; text?: string };
+        if (o.type === 'text' && o.text) texts.push(o.text);
+      } else if (typeof part === 'string') texts.push(part);
+    }
+    contentText = texts.length ? texts.join('\n') : null;
+  }
+
+  return { contentText, toolCalls };
+}
+
+export interface ChatCompletionRawOptions {
+  tools?: unknown[];
+  tool_choice?: string | Record<string, unknown>;
+}
+
+/**
+ * 原始 Chat Completions 响应（支持 tools）。
+ */
+export async function sendChatCompletionRaw(
+  apiConfig: ApiConfig,
+  messages: ChatMessage[],
+  options?: ChatCompletionRawOptions,
+): Promise<Record<string, unknown>> {
+  const endpointUrl = apiConfig.endpointUrl?.trim();
+  const apiKey = apiConfig.apiKey?.trim();
+  const modelName = apiConfig.modelName?.trim();
+  if (!endpointUrl || !modelName || !apiKey) {
+    throw new Error('请先在对话设置中填写 Endpoint、模型名与 API Key');
+  }
+
+  validateMessagesForSend(messages);
+
+  const apiMsgs = messages.map(messageToOpenAiMessage);
+  if (!apiMsgs.length) {
+    throw new Error('内部错误：映射后的 messages 为空，无法请求 API');
+  }
+
+  const payload: Record<string, unknown> = {
+    model: modelName,
+    messages: apiMsgs,
+  };
+
+  if (options?.tools?.length) {
+    payload.tools = options.tools;
+    payload.tool_choice = options.tool_choice ?? 'auto';
+  }
+
+  const response = await fetch(endpointUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`API 错误 (${response.status}): ${errBody}`);
+  }
+
+  return (await response.json()) as Record<string, unknown>;
+}
+
+/**
+ * OpenAI 兼容多轮对话（含 image_url / video_url）；不含 tools。
+ */
+export async function sendChatCompletion(apiConfig: ApiConfig, messages: ChatMessage[]): Promise<string> {
+  const data = await sendChatCompletionRaw(apiConfig, messages, undefined);
+  return extractAssistantText(data);
+}

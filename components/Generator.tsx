@@ -14,7 +14,7 @@ import {
  Save,
  Trash2,
  Key,
- Pencil
+ Pencil,
 } from 'lucide-react';
 import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ImageSizeType, GptImageQualityType, ProtocolConfig, CustomModelConfig, ApiProviderType } from '../types';
 import { generateImage, downloadImage, isImageResult, fileToBase64 } from '../services/geminiService';
@@ -258,7 +258,8 @@ const setApiConfig = (key: keyof AppSettings['apiConfig'], val: string) => {
   const handleDeleteCustomModel = (modelId: string) => {
     setSettings(prev => ({
       ...prev,
-      customModels: (prev.customModels || []).filter(m => m.id !== modelId)
+      customModels: (prev.customModels || []).filter(m => m.id !== modelId),
+      agentImagePresetId: prev.agentImagePresetId === modelId ? undefined : prev.agentImagePresetId,
     }));
     addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `自定义模型已删除` });
   };

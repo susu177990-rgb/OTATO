@@ -22,6 +22,12 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     modelName: 'gemini-3-pro-image-preview',
     apiProvider: 'laozhang'
   },
+  chatApiConfig: {
+    endpointUrl: '',
+    apiKey: '',
+    modelName: '',
+    apiProvider: 'laozhang'
+  },
   videoApiConfig: {
     endpointUrl: KLING_MOTION_CONTROL_ENDPOINT,
     apiKey: '',
@@ -31,5 +37,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   savedApiKeys: {},
   savedUrls: {},
-  customModels: []
+  chatSavedApiKeys: {},
+  chatSavedUrls: {},
+  customModels: [],
+  chatCustomModels: []
 };

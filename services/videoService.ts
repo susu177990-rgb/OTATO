@@ -1,23 +1,9 @@
-import { ProtocolConfig, ApiConfig, VideoResolutionType } from '../types';
+import { ProtocolConfig, ApiConfig, VideoGenerationConfig, VideoResolutionType } from '../types';
 
 const POLL_MAX_ATTEMPTS = 120; // 120次 * 5秒 = 10分钟
 const POLL_INTERVAL = 5000;    // 5秒
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-type VideoGenerationConfig = Omit<ProtocolConfig, 'imageSize'> & {
-  duration?: number;
-  motionImageUrl?: string;
-  motionVideoUrl?: string;
-  motionVideoName?: string;
-  motionMode?: string;
-  characterOrientation?: 'image' | 'video';
-  keepOriginalSound?: boolean;
-  videoMode?: 'motion-transfer' | 'first-last-frame' | 'image-to-video';
-  videoResolution?: VideoResolutionType;
-  enhancePrompt?: boolean;
-  enableUpsample?: boolean;
-};
 
 const isMotionControlRequest = (apiConfig: ApiConfig): boolean =>
   apiConfig?.modelName === 'kling-video-motion-control' ||

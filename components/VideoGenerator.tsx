@@ -13,7 +13,7 @@ import {
   Film,
   Save,
   Trash2,
-  Pencil
+  Pencil,
 } from 'lucide-react';
 import { AppSettings, GeneratedImage, LogEntry, AspectRatioType, ProtocolConfig, CustomModelConfig, VideoModeType, VideoResolutionType } from '../types';
 import { downloadImage, fileToBase64 } from '../services/geminiService';
@@ -351,6 +351,7 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
     setSettings(prev => ({
       ...prev,
       videoCustomModels: (prev.videoCustomModels || []).filter(m => m.id !== modelId),
+      agentVideoPresetId: prev.agentVideoPresetId === modelId ? undefined : prev.agentVideoPresetId,
       videoApiConfig: prev.videoApiConfig?.presetId === modelId
         ? {
             ...prev.videoApiConfig,
