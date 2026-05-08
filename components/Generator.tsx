@@ -22,6 +22,11 @@ import { DEFAULT_FIXED_CUSTOM_MODELS, isDefaultFixedImagePreset } from '../const
 
 // ── 模型预设（侧边栏快速切换用） ──────────────────────────────────
 
+const REF_IMAGE_SLOT_COUNT = 16;
+const createEmptyRefSlots = (): Array<string | null> => Array.from({ length: REF_IMAGE_SLOT_COUNT }, () => null);
+const normalizeRefSlots = (images: Array<string | null>): Array<string | null> =>
+  Array.from({ length: REF_IMAGE_SLOT_COUNT }, (_, idx) => images[idx] ?? null);
+
 interface GeneratorProps {
   isActive: boolean;
   settings: AppSettings;
@@ -42,7 +47,7 @@ const Generator: React.FC<GeneratorProps> = ({
   showLogs,
 }) => {
   const [prompts, setPrompts] = React.useState<string[]>(['']);
-  const [refImages, setRefImages] = React.useState<string[]>([]);
+  const [refImages, setRefImages] = React.useState<Array<string | null>>(createEmptyRefSlots);
   const [aspectRatio, setAspectRatio] = React.useState<AspectRatioType>('auto');
   const [imageSize, setImageSize] = React.useState<ImageSizeType>('1K');
   const [imageQuality, setImageQuality] = React.useState<GptImageQualityType>('auto');
@@ -90,38 +95,69 @@ const Generator: React.FC<GeneratorProps> = ({
       }
       if (imgItems.length > 0) {
         e.preventDefault();
-        for (const item of imgItems) {
-          const blob = item.getAsFile();
-          if (blob) {
-            try {
-              const b64 = await fileToBase64(blob as File);
-              setRefImages(prev => [...prev, b64]);
-            } catch (e) {
-              addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `粘贴参考图失败: ${getErrorMessage(e)}` });
-            }
-          }
-        }
+        addRefImages(imgItems.map(item => item.getAsFile()).filter((file): file is File => file != null), '粘贴参考图失败');
       }
     };
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [isActive]);
 
+  const addRefImages = async (files: File[], errorPrefix = '上传失败') => {
+    const imageFiles = files.filter(file => file.type.startsWith('image/'));
+    if (imageFiles.length === 0) return;
+
+    const converted: string[] = [];
+    for (const file of imageFiles) {
+      try {
+        converted.push(await fileToBase64(file));
+      } catch (e) {
+        addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `${errorPrefix} (${file.name}): ${getErrorMessage(e)}` });
+      }
+    }
+
+    if (converted.length === 0) return;
+    setRefImages(prev => {
+      const next = normalizeRefSlots(prev);
+      let cursor = next.findIndex(src => !src);
+      let used = 0;
+      while (cursor !== -1 && used < converted.length) {
+        next[cursor] = converted[used];
+        used += 1;
+        cursor = next.findIndex((src, idx) => idx > cursor && !src);
+      }
+      if (used < converted.length) {
+        addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `参考图已满，仅保留前 ${used} 张新图片` });
+      }
+      return next;
+    });
+  };
+
+  const replaceRefImage = async (idx: number, file?: File | null) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    try {
+      const b64 = await fileToBase64(file);
+      setRefImages(prev => {
+        const next = normalizeRefSlots(prev);
+        next[idx] = b64;
+        return next;
+      });
+    } catch (e) {
+      addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `替换图${idx + 1}失败 (${file.name}): ${getErrorMessage(e)}` });
+    }
+  };
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files?.length) return;
-    for (const file of Array.from<File>(files)) {
-      try {
-        const b64 = await fileToBase64(file);
-        setRefImages(prev => [...prev, b64]);
-      } catch (e) {
-        addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `上传失败 (${file.name}): ${getErrorMessage(e)}` });
-      }
-    }
+    await addRefImages(Array.from<File>(files));
     e.target.value = '';
   };
 
-  const removeRefImage = (idx: number) => setRefImages(prev => prev.filter((_, i) => i !== idx));
+  const clearRefImage = (idx: number) => setRefImages(prev => {
+    const next = normalizeRefSlots(prev);
+    next[idx] = null;
+    return next;
+  });
 
   const addPrompt    = () => setPrompts(prev => [...prev, '']);
   const removePrompt = (idx: number) => setPrompts(prev => prev.filter((_, i) => i !== idx));
@@ -231,7 +267,8 @@ const Generator: React.FC<GeneratorProps> = ({
     addLog({ id: `start-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: `开始生图 [${settings.apiConfig.modelName || '默认模型'}]，比例 ${aspectRatio}，分辨率 ${imageSize}，质量 ${imageQuality}...` });
 
     try {
-      const resultUrl = await generateImage(config, settings.apiConfig, refImages);
+      const filledRefImages = refImages.filter((src): src is string => Boolean(src));
+      const resultUrl = await generateImage(config, settings.apiConfig, filledRefImages);
       setLastResult(resultUrl);
       if (resultUrl && isImageResult(resultUrl)) {
         let persistUrl = resultUrl;
@@ -463,39 +500,78 @@ return (
 {/* 操作控制区 */}
   <div className="flex-shrink-0 border-t border-gray-800/60 bg-gray-950/50 flex flex-col">
 
-    {/* 参考图（上方，4xn 网格向下延伸） */}
+    {/* 参考图（固定 4x4 槽位） */}
     <div
       className="px-3 py-2 border-b border-gray-800/40"
       onDragOver={e => e.preventDefault()}
       onDrop={e => {
         e.preventDefault();
-        Array.from<File>(e.dataTransfer.files)
-          .filter(f => f.type.startsWith('image/'))
-          .forEach(f => fileToBase64(f)
-            .then(b => setRefImages(prev => [...prev, b]))
-            .catch(err => addLog({ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), level: 'ERROR', message: `拖拽失败: ${getErrorMessage(err)}` })));
+        addRefImages(Array.from<File>(e.dataTransfer.files), '拖拽失败');
       }}
     >
       <div className="flex items-center gap-1.5 text-gray-600 mb-1.5">
         <Camera size={11} />
-        <span className="text-[10px] font-bold uppercase font-mono">参考图</span>
+        <span className="text-[10px] font-bold uppercase font-mono">参考图 4x4</span>
         <label className="ml-auto p-0.5 text-gray-600 hover:text-indigo-400 cursor-pointer transition-colors">
           <input type="file" className="hidden" accept="image/*" multiple onChange={handleUpload} />
           <Plus size={12} />
         </label>
       </div>
       <div className="grid grid-cols-4 gap-1">
-        {refImages.map((src, idx) => (
-          <div key={idx} className="relative aspect-square rounded border border-gray-700 group/thumb overflow-hidden">
-            <img src={src} alt="" className="w-full h-full object-cover" />
-            <button
-              onClick={() => removeRefImage(idx)}
-              className="absolute inset-0 bg-black/70 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center"
+        {refImages.map((src, idx) => {
+          const label = `图${idx + 1}`;
+          return (
+            <div
+              key={idx}
+              className={`relative aspect-square rounded border group/thumb overflow-hidden ${
+                src ? 'border-gray-700 bg-black/30' : 'border-dashed border-gray-700/80 bg-black/20 hover:border-indigo-500/60'
+              }`}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => {
+                e.preventDefault();
+                replaceRefImage(idx, Array.from<File>(e.dataTransfer.files).find(f => f.type.startsWith('image/')));
+              }}
             >
-              <X size={12} className="text-white" />
-            </button>
-          </div>
-        ))}
+              <label className="absolute inset-0 cursor-pointer">
+                <input
+                  type="file"
+                  className="hidden"
+                  accept="image/*"
+                  onChange={e => {
+                    replaceRefImage(idx, e.target.files?.[0]);
+                    e.currentTarget.value = '';
+                  }}
+                />
+                {src ? (
+                  <>
+                    <img src={src} alt={label} className="w-full h-full object-cover" />
+                    <span className="absolute left-0.5 top-0.5 px-1 rounded-[3px] bg-black/65 text-[8px] leading-3 font-mono text-gray-200">
+                      {label}
+                    </span>
+                    <span className="absolute inset-x-0 bottom-0 bg-black/70 py-0.5 text-center text-[8px] font-mono text-gray-300 opacity-0 group-hover/thumb:opacity-100 transition-opacity">
+                      替换
+                    </span>
+                  </>
+                ) : (
+                  <span className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-gray-600 group-hover/thumb:text-indigo-400 transition-colors">
+                    <ImageIcon size={12} />
+                    <span className="text-[9px] font-mono">{label}</span>
+                  </span>
+                )}
+              </label>
+              {src && (
+                <button
+                  type="button"
+                  onClick={() => clearRefImage(idx)}
+                  className="absolute right-0.5 top-0.5 p-0.5 rounded bg-black/70 text-gray-300 opacity-0 group-hover/thumb:opacity-100 hover:text-red-300 transition-all"
+                  title={`清空${label}`}
+                >
+                  <X size={9} />
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
 
@@ -522,7 +598,7 @@ return (
             onKeyDown={handleKeyDown(idx)}
             placeholder={idx === 0 ? "描述你想生成的图像..." : "追加描述..."}
             rows={3}
-            className="w-full bg-black/40 border border-gray-700/80 rounded px-2 py-1.5 text-[11px] text-gray-200 placeholder-gray-700 outline-none font-sans focus:border-indigo-500 transition-colors resize-none"
+            className="w-full min-h-20 max-h-80 bg-black/40 border border-gray-700/80 rounded px-2 py-1.5 text-[11px] text-gray-200 placeholder-gray-700 outline-none font-sans focus:border-indigo-500 transition-colors resize-y custom-scrollbar"
           />
           {idx > 0 && (
             <button

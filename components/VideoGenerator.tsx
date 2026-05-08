@@ -907,7 +907,7 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
                     ? (isMotionControlModel ? '可选：描述动作迁移后的镜头、风格或质量要求...' : '描述你想生成的视频...')
                     : (isMotionControlModel ? '追加补充动作要求...' : '追加补充描述...')}
                   rows={3}
-                  className="w-full bg-black/40 border border-gray-700/80 rounded px-2 py-1.5 text-[11px] text-gray-200 placeholder-gray-700 outline-none font-sans focus:border-indigo-500 transition-colors resize-none"
+                  className="w-full min-h-20 max-h-80 bg-black/40 border border-gray-700/80 rounded px-2 py-1.5 text-[11px] text-gray-200 placeholder-gray-700 outline-none font-sans focus:border-indigo-500 transition-colors resize-y custom-scrollbar"
                 />
                 {idx > 0 && (
                   <button

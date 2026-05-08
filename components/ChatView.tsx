@@ -932,9 +932,9 @@ const ChatView: React.FC<ChatViewProps> = ({ isActive, settings, setSettings, sh
               onKeyDown={handleComposerKeyDown}
               onPaste={handleComposerPaste}
               placeholder="输入消息…（Enter 发送，Shift+Enter 换行；可粘贴图片/文件为附件）"
-              rows={2}
+              rows={6}
               disabled={isSending}
-              className="flex-1 bg-black/40 border border-gray-700/80 rounded-lg px-3 py-2 text-[13px] text-gray-200 placeholder-gray-600 outline-none focus:border-indigo-500 resize-none min-h-[44px] max-h-32 custom-scrollbar"
+              className="flex-1 bg-black/40 border border-gray-700/80 rounded-lg px-3 py-2 text-[13px] text-gray-200 placeholder-gray-600 outline-none focus:border-indigo-500 resize-y min-h-[132px] max-h-[40vh] custom-scrollbar"
             />
             <button
               type="button"
